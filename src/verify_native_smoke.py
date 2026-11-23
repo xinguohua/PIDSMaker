@@ -1,5 +1,5 @@
 """Rebuild a real Velox model and replay bounded validation/test without training."""
-import argparse,json,os,sys
+import argparse,json,os,sys,time
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -9,6 +9,13 @@ from baseline_matrix import summarize,save,load_evaluation_checkpoint
 from server_credentials import database_options
 p=argparse.ArgumentParser();p.add_argument('--cell',type=Path,required=True);p.add_argument('--server-config',type=Path,required=True);a=p.parse_args()
 out=Path(os.environ['RUN_OUTPUT_DIR']);cell=a.cell
+for _ in range(120):
+ status=cell/'status.json'
+ state=json.loads(status.read_text()).get('state') if status.exists() else None
+ if state == 'failed': raise RuntimeError('Source smoke failed; preserved')
+ if state == 'pipeline_finished_pending_acceptance': break
+ time.sleep(5)
+else: raise TimeoutError('Source smoke not terminal within 600 seconds')
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from pidsmaker.tasks.batching import get_preprocessed_graphs
 from pidsmaker.factory import build_model
