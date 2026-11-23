@@ -165,7 +165,7 @@ def run(args):
              'gt_sha256':{f:digest(ROOT/'Ground_Truth/orthrus'/f) for f in cfg.dataset.ground_truth_relative_path},
              'environment':{'pidsmaker_source':__import__('pidsmaker').__file__,'python':sys.version,'platform':platform.platform(),'torch':torch.__version__,
                 'device':server['device'],'gpu':torch.cuda.get_device_name() if torch.cuda.is_available() else None},
-             'output':str(cell),'cache_policy':'fresh isolated artifacts; no shared reuse',
+             'output':str(cell),'cache_policy':('validated read-only prepared artifacts shared; fresh fitted states and outputs; legacy cache reused bytes=0' if args.prepared_cell else 'fresh isolated artifacts; legacy cache reused bytes=0'),
              'recovery':'retain failed job; deploy a new run_id after fixing cause','created_at':now()})
         with (cell/'packages.txt').open('w') as f:
             subprocess.run([sys.executable,'-m','pip','list','--format=json'],stdout=f,check=True)

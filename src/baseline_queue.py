@@ -43,11 +43,11 @@ def persist(path,doc):
     out=Path(os.environ.get('RUN_OUTPUT_DIR',str(path.parent)));out.mkdir(parents=True,exist_ok=True)
     save(out/'summary.json',{'state':'queue_monitoring','canonical':str(path),'canonical_sha256':digest(path),'time':now(),'completed':sum(r['state']=='completed' for r in doc['rows']),'rows':doc['rows']})
 
-def launch_verify(run,config):
+def launch_verify(run,config,cell):
     destination=run/'verification'/('verify-'+git('rev-parse','--short','HEAD'))
     if not destination.exists():
         destination.mkdir(parents=True)
-        spec={'kind':'verify','run':str(run),'config':str(config),'output':str(destination),'code':str(ROOT),'commit':git('rev-parse','HEAD')}
+        spec={'kind':'verify','cell':str(cell),'run':str(run),'config':str(config),'output':str(destination),'code':str(ROOT),'commit':git('rev-parse','HEAD')}
         save(destination/'spec.json',spec)
         cmd=[sys.executable,str(ROOT/'src/baseline_queue.py'),'worker',str(destination/'spec.json')]
         import shlex
@@ -56,7 +56,7 @@ def launch_verify(run,config):
 
 def worker(spec_path):
     spec=read(spec_path);out=Path(spec['output']);env=os.environ.copy();env['RUN_OUTPUT_DIR']=str(out)
-    cmd=spec.get('command') or [sys.executable,str(ROOT/'src/verify_native_smoke.py'),'--cell',str(Path(spec['run'])/'output/CADETS_E3-velox-full'),'--server-config',spec['config'],'--full']
+    cmd=spec.get('command') or [sys.executable,str(ROOT/'src/verify_native_smoke.py'),'--cell',spec['cell'],'--server-config',spec['config'],'--full']
     env.update(spec.get('environment',{}))
     save(out/'status.json',{'state':'running','pid':os.getpid(),'time':now(),'commit':spec['commit']})
     with (out/'run.log').open('a') as f:
@@ -102,6 +102,8 @@ def queue(args):
             row=next(r for r in doc['rows'] if r['dataset']=='CADETS_E3' and r['model']=='velox')
             if not row['accepted_run_id']:register(row,args.adopt_run)
         while True:
+            control=read(path.parent/'control.json',{})
+            doc['scheduler']={'paused':control.get('paused',True),'time':now(),'reason':control.get('reason','Fail closed: explicit resume required')}
             for row in doc['rows']:
                 if not row['active_run_id']:continue
                 attempt=next(a for a in row['attempts'] if a['run_id']==row['active_run_id'])
@@ -125,7 +127,7 @@ def queue(args):
                 row['state']='pipeline_finished_pending_acceptance'
                 if row['model']!='velox':
                     row.update(state='acceptance_blocked',active_run_id=None,blocker='Independent verifier currently supports Velox only');continue
-                dest=launch_verify(run,args.server_config);attempt['verification_directory']=str(dest)
+                dest=launch_verify(run,args.server_config,cell);attempt['verification_directory']=str(dest)
                 vstatus=read(dest/'status.json',{});attempt['verification_status']=vstatus
                 if vstatus.get('exit_code')==0:
                     try:accept(row,attempt,read(dest/'summary.json',{}))
@@ -133,7 +135,7 @@ def queue(args):
                 elif 'exit_code' in vstatus:
                     attempt['failure']='Verification failed; inspect '+str(dest/'run.log');row.update(state='acceptance_failed',active_run_id=None)
             # One native worker at a time; independent missing inputs do not block later pairs.
-            if not any(r['active_run_id'] for r in doc['rows']):
+            if not doc['scheduler']['paused'] and not any(r['active_run_id'] for r in doc['rows']):
                 free=shutil.disk_usage(path.parent).free
                 server=read(args.server_config)
                 for row in doc['rows']:
@@ -153,6 +155,8 @@ def queue(args):
                         row['capacity']={'free_bytes':free,'estimated_required_bytes':required,'basis':'measured prepared edges and native feature dimension; explicit serialization/fitted/output allowances'}
                         if required>free:
                             row.update(state='paused_capacity',blocker='Measured preparation capacity budget exceeds free bytes');continue
+                    if prepared and row['model']!='velox':
+                        row.update(state='verification_unsupported',blocker='Full launch disabled until model-specific replay is qualified');continue
                     phase='full' if prepared else 'prepare'
                     run,spec=launch_native(row,path,args.server_config,phase,prepared)
                     # Publish ownership before tmux launch. A crash here is unresolved, never duplicated.
