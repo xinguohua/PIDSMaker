@@ -165,6 +165,8 @@ def get_node_predictions(val_tw_path, test_tw_path, cfg, **kwargs):
             results,
             topk_K=cfg.evaluation.node_evaluation.kmeans_top_K,
         )
+    for record in results.values():
+        record["decision_threshold"] = thr
     return results, thr, all_edge_records
 
 
@@ -278,6 +280,8 @@ def get_node_predictions_node_level(val_tw_path, test_tw_path, cfg, **kwargs):
                 cfg.evaluation.node_evaluation.threshold_method,
             )
 
+        results[node_id]["decision_threshold"] = (thr_by_type.get(node_to_type.get(node_id), thr)
+                                                   if thr_by_type is not None else thr)
         results[node_id]["score"] = pred_score
         results[node_id]["tw_with_max_loss"] = node_to_max_loss_tw.get(node_id, -1)
         results[node_id]["y_true"] = int(node_id in ground_truth_nids)

@@ -86,7 +86,10 @@ def main(cfg):
     assert run_evaluation in ["best_epoch", "each_epoch"], (
         f"Invalid run evaluation {run_evaluation}"
     )
-    best_epoch_mode = run_evaluation == "best_epoch"
+    fixed_budget = cfg.evaluation.best_model_selection == "fixed_budget"
+    if fixed_budget and (cfg._from_weights or cfg.training.decoder.use_few_shot):
+        raise ValueError("fixed_budget requires fresh, non-few-shot training")
+    best_epoch_mode = run_evaluation == "best_epoch" and not fixed_budget
 
     num_epochs = 1 if cfg._from_weights else cfg.training.num_epochs
     tot_loss = 0.0
@@ -101,7 +104,8 @@ def main(cfg):
     use_few_shot = cfg.training.decoder.use_few_shot
     grad_acc = cfg.training.grad_accumulation
 
-    es_tracker = early_stop_tracker_factory(cfg)
+    # Fixed-budget runs do not select a stopping epoch from labels or scores.
+    es_tracker = None if fixed_budget else early_stop_tracker_factory(cfg)
     # Stable optim: warmup cosine scheduler (computed over total training steps)
     scheduler = None
     if stable_optim:
@@ -264,13 +268,13 @@ def main(cfg):
         # Per-epoch checkpoints are only needed by the visualizer's epoch selector.
         # Opt-in via `--save_for_viz`; otherwise skip — the pipeline evaluates from
         # the in-memory best model and never reloads these from disk.
-        if cfg._save_for_viz:
+        if cfg._save_for_viz or (fixed_budget and epoch == num_epochs - 1):
             gnn_models_dir = cfg.training._trained_models_dir
             model_path = os.path.join(gnn_models_dir, f"model_epoch_{epoch}")
             save_model(model, model_path)
 
         # Test
-        if (epoch + 1) % 2 == 0 or epoch == 0:
+        if (epoch == num_epochs - 1) if fixed_budget else ((epoch + 1) % 2 == 0 or epoch == 0):
             test_stats = inference_loop.main(
                 cfg=cfg,
                 model=model,

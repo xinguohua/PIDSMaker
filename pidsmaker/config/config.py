@@ -1514,8 +1514,8 @@ TASK_ARGS = {
         "ground_truth_version": Arg(str, vals=OR(["orthrus", "reapr", "threatrace"])),
         "best_model_selection": Arg(
             str,
-            vals=OR(["best_adp", "best_discrimination", "best_ap@10"]),
-            desc="Strategy to select the best model across epochs. `best_adp` selects the best model based on the highest ADP score, `best_discrimination` \
+            vals=OR(["best_adp", "best_discrimination", "best_ap@10", "fixed_budget"]),
+            desc="fixed_budget evaluates only the final predetermined training epoch. Strategy to select the best model across epochs. `best_adp` selects the best model based on the highest ADP score, `best_discrimination` \
                                     selects the model that does the best separation between top-score TPs and top-score FPs.",
         ),
         "used_method": Arg(str),

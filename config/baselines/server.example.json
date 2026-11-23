@@ -1,0 +1,10 @@
+{
+  "data_disk_root": "/SERVER_DATA_DISK",
+  "device": "cuda",
+  "database": {"host": "SERVER_DB_HOST", "port": 5432, "user": "SERVER_DB_USER", "password_env": "PIDS_DB_PASSWORD"},
+  "input_manifests": {
+    "CADETS_E3": "/SERVER_PRIVATE_CONFIG/cadets-input.json",
+    "THEIA_E3": "/SERVER_PRIVATE_CONFIG/theia-input.json",
+    "CLEARSCOPE_E3": "/SERVER_PRIVATE_CONFIG/clearscope-input.json"
+  }
+}

@@ -192,8 +192,13 @@ def get_threshold(val_tw_path, threshold_method: str, alpha=1.0, contamination=0
 def get_threshold_per_type(val_tw_path, cfg, min_contamination=0.001, max_contamination=0.05):
     # per node type: contamination = own val malicious fraction, clamped to [min, max]
     node_to_type = {nid: info["type"] for nid, info in get_node_to_path_and_type(cfg).items()}
-    gt_nids, _, _ = labelling.get_ground_truth(cfg)
-    gt_nids = set(int(n) for n in gt_nids)
+    fixed_budget = cfg.evaluation.best_model_selection == "fixed_budget"
+    # In the preregistered baseline, calibration cannot consult test attack UUIDs.
+    if fixed_budget:
+        gt_nids = set()
+    else:
+        gt_nids, _, _ = labelling.get_ground_truth(cfg)
+        gt_nids = set(int(n) for n in gt_nids)
 
     losses_by_type = defaultdict(list)
     malicious_by_type = defaultdict(int)
@@ -212,7 +217,7 @@ def get_threshold_per_type(val_tw_path, cfg, min_contamination=0.001, max_contam
     thresholds = {}
     for nt, losses in losses_by_type.items():
         frac = malicious_by_type[nt] / total_by_type[nt] if total_by_type[nt] > 0 else 0.0
-        contamination = min(max(frac, min_contamination), max_contamination)
+        contamination = max_contamination if fixed_budget else min(max(frac, min_contamination), max_contamination)
         thresholds[nt] = float(np.percentile(losses, 100 * (1 - contamination)))
     return thresholds
 

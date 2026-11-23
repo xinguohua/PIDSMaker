@@ -26,6 +26,12 @@ def standard_evaluation(cfg, evaluation_fn, group_by_time_window=False):
     else:
         sorted_files = listdir_sorted(test_losses_dir)
 
+    if cfg.evaluation.best_model_selection == "fixed_budget":
+        expected = f"model_epoch_{cfg.training.num_epochs - 1}"
+        if expected not in sorted_files:
+            raise ValueError(f"Missing final fixed-budget predictions: {expected}")
+        sorted_files = [expected]
+
     # Pass the first epoch's CSV directory so compute_tw_labels enumerates the
     # same files as node_evaluation, avoiding TW index mismatch when
     # intra-graph batching splits graphs into multiple sub-batches.
@@ -112,6 +118,12 @@ def standard_evaluation(cfg, evaluation_fn, group_by_time_window=False):
 
 def best_metric_pick_best_epoch(stats, best_metrics, cfg):
     best_model_selection = cfg.evaluation.best_model_selection
+
+    if best_model_selection == "fixed_budget":
+        if stats["epoch"] != cfg.training.num_epochs - 1:
+            raise ValueError("Refusing a partial-budget checkpoint")
+        best_metrics["stats"] = stats
+        return best_metrics
 
     # ADP and discrimination are only computed by node/edge-level evaluations.
     # Other evaluations (tw, node_tw) fall back to selecting the epoch with best AP.

@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""Auditable E3 baseline jobs. Run training only through the existing remote controller."""
+import argparse
+import ast
+import csv
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+ROOT = Path(__file__).resolve().parents[1]
+DATASETS = ('CADETS_E3', 'THEIA_E3', 'CLEARSCOPE_E3')
+MODELS = ('ocrapt', 'velox', 'orthrus', 'magic', 'kairos')
+
+
+def now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def save(path, value):
+    path = Path(path)
+    tmp = path.with_suffix(path.suffix + '.tmp')
+    tmp.write_text(json.dumps(value, indent=2, allow_nan=False) + '\n')
+    tmp.replace(path)
+
+
+def digest(path):
+    h = hashlib.sha256()
+    with Path(path).open('rb') as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def git(*args):
+    return subprocess.check_output(['git', '-C', str(ROOT), *args], text=True).strip()
+
+
+def protocol():
+    tree = ast.parse((ROOT / 'pidsmaker/config/config.py').read_text())
+    data = ast.literal_eval(next(n.value for n in tree.body if isinstance(n, ast.Assign)
+                           and any(isinstance(t, ast.Name) and t.id == 'DATASET_DEFAULT_CONFIG' for t in n.targets)))
+    return {k: data[k] for k in DATASETS}
+
+
+def matrix():
+    rows = [{'dataset': d, 'model': m, 'seed': 0, 'mode': 'full', 'state': 'not_started'}
+            for d in DATASETS for m in MODELS]
+    rows.sort(key=lambda r: (r['dataset'] != 'CADETS_E3' or r['model'] != 'velox',
+                             DATASETS.index(r['dataset']), MODELS.index(r['model'])))
+    return rows
+
+
+def metrics(rows):
+    counts = dict(TP=0, FP=0, TN=0, FN=0)
+    seen = set()
+    for row in rows:
+        key = row['node_id']
+        if key in seen:
+            raise ValueError('Duplicate node in scored universe')
+        seen.add(key)
+        y, p = int(row['gt']), int(row['prediction'])
+        if y not in (0, 1) or p not in (0, 1):
+            raise ValueError('Labels must be binary')
+        counts[('T' if y == p else 'F') + ('P' if p else 'N')] += 1
+    t, f, n, miss = (counts[k] for k in ('TP', 'FP', 'TN', 'FN'))
+    div = lambda a, b: a / b if b else None
+    return dict(unit='node', positive='malicious', n=len(seen), **counts,
+                precision=div(t,t+f), recall=div(t,t+miss), f1=div(2*t,2*t+f+miss),
+                fpr=div(f,f+n), fnr=div(miss,t+miss))
+
+
+def prepare(output):
+    output.mkdir(parents=True, exist_ok=True)
+    save(output/'matrix.json', matrix())
+    p = protocol()
+    for d, v in p.items():
+        v['gt_version'] = 'orthrus'
+        v['gt_sha256'] = {f: digest(ROOT/'Ground_Truth/orthrus'/f) for f in v['ground_truth_relative_path']}
+        v['server_integrity'] = 'unverified'
+    save(output/'protocol.json', p)
+    save(output/'source.json', {'commit': git('rev-parse','HEAD'), 'created_at': now(),
+                               'dirty': bool(git('status','--porcelain')), 'upstream_latest_verified': False})
+
+
+def run(args):
+    # No laptop processing. remote.py supplies these paths on the server data disk.
+    if platform.system() != 'Linux' or not os.environ.get('RUN_OUTPUT_DIR') or not os.environ.get('RUN_ID'):
+        raise RuntimeError('Run only in a Linux job deployed by remote.py')
+    if git('status', '--porcelain'):
+        raise RuntimeError('Commit and publish code before deployment')
+    out = Path(os.environ['RUN_OUTPUT_DIR']).resolve()
+    server = json.loads(args.server_config.read_text())
+    disk = Path(server['data_disk_root']).resolve()
+    if disk == Path('/') or not out.is_relative_to(disk):
+        raise ValueError('RUN_OUTPUT_DIR must be on the configured data disk')
+    cell = out / (args.dataset + '-' + args.model + '-' + args.mode)
+    cell.mkdir(exist_ok=False)  # no ambiguous restart, cache reuse, or smoke/full collision
+    os.chmod(cell, 0o700)
+    status = cell/'status.json'
+    save(status, {'state':'preparing', 'time':now()})
+    try:
+        evidence_path = Path(server['input_manifests'][args.dataset])
+        evidence = json.loads(evidence_path.read_text())
+        if evidence.get('dataset') != args.dataset or evidence.get('integrity_verified') is not True:
+            raise ValueError('A server-verified input/DB manifest is required')
+        for key in ('raw_files', 'database_snapshot', 'date_coverage', 'uuid_mapping_sha256', 'boundary_counts'):
+            if not evidence.get(key):
+                raise ValueError('Missing input evidence: ' + key)
+        save(cell/'input_manifest.json', evidence)
+        for name in ('tmp','cache','wandb','artifacts'):
+            (cell/name).mkdir()
+        os.environ.update(TMPDIR=str(cell/'tmp'), XDG_CACHE_HOME=str(cell/'cache'),
+                          WANDB_DIR=str(cell/'wandb'), WANDB_MODE='disabled',
+                          CUBLAS_WORKSPACE_CONFIG=':4096:8')
+        if os.environ.get('PYTHONHASHSEED') != '0':
+            raise ValueError('Launch with PYTHONHASHSEED=0 (see README)')
+        sys.path.insert(0, str(ROOT))
+        from pidsmaker.config import get_runtime_required_args, get_yml_cfg
+        import torch
+        import wandb
+        from pidsmaker.main import main
+        command = [args.model,args.dataset,'--artifact_dir',str(cell/'artifacts'),
+                   '--evaluation.best_model_selection','fixed_budget','--training.seed','0',
+                   '--featurization.seed','0','--featurization.training_split','train',
+                   '--training_loop.run_evaluation','each_epoch']
+        if args.mode == 'smoke':
+            command += ['--test_mode','--training.num_epochs','1','--featurization.epochs','1']
+        if server['device'] == 'cpu':
+            command += ['--cpu']
+        elif server['device'] != 'cuda':
+            raise ValueError('device must be cpu or cuda')
+        parsed, unknown = get_runtime_required_args(True, command)
+        if unknown:
+            raise ValueError('Unknown framework arguments')
+        db = server['database']
+        parsed.database_host, parsed.database_user = db['host'], db['user']
+        parsed.database_port = db['port']
+        parsed.database_password = os.environ[db['password_env']]
+        cfg = get_yml_cfg(parsed)
+        resolved = cfg.clone()
+        resolved.database.password = '<environment>'
+        (cell/'resolved_config.yml').write_text(resolved.dump())
+        save(cell/'manifest.json', {'commit':git('rev-parse','HEAD'), 'task_id':os.environ['RUN_ID'],
+             'model':args.model,'dataset':args.dataset,'mode':args.mode,'seed':0,'command':command,
+             'input_sha256':digest(evidence_path),'config_sha256':digest(cell/'resolved_config.yml'),
+             'protocol':protocol()[args.dataset], 'gt_version':'orthrus',
+             'gt_sha256':{f:digest(ROOT/'Ground_Truth/orthrus'/f) for f in cfg.dataset.ground_truth_relative_path},
+             'environment':{'python':sys.version,'platform':platform.platform(),'torch':torch.__version__,
+                'device':server['device'],'gpu':torch.cuda.get_device_name() if torch.cuda.is_available() else None},
+             'output':str(cell),'cache_policy':'fresh isolated artifacts; no shared reuse',
+             'recovery':'retain failed job; deploy a new run_id after fixing cause','created_at':now()})
+        with (cell/'packages.txt').open('w') as f:
+            subprocess.run([sys.executable,'-m','pip','list','--format=json'],stdout=f,check=True)
+        save(status, {'state':'running','time':now(),'pid':os.getpid()})
+        wandb.init(mode='disabled')
+        main(cfg, exp=os.environ['RUN_ID'])
+        export(cfg, cell)
+        save(status, {'state':'pipeline_finished_pending_acceptance','time':now(),
+             'remaining':'verify complete input/split coverage and reconstructed-model reload; smoke is never full'})
+        save(out/'summary.json', {'run_id':os.environ['RUN_ID'],'cell':str(cell),
+             'status':json.loads(status.read_text()),'metrics':json.loads((cell/'metrics.json').read_text())})
+    except BaseException as exc:
+        # Avoid writing credential-bearing exception messages to small returned results.
+        save(status, {'state':'failed','time':now(),'error_type':type(exc).__name__,
+                      'recovery':'Inspect server run.log; preserve artifacts and use a new run_id'})
+        raise
+
+
+def export(cfg, cell):
+    import torch
+    from pidsmaker.utils.dataset_utils import get_uuid_to_index_id
+    from pidsmaker.utils.labelling import ground_truth_files, read_ground_truth_uuids
+    epoch = f'model_epoch_{cfg.training.num_epochs-1}'
+    results = torch.load(Path(cfg.evaluation._precision_recall_dir)/f'result_{epoch}.pth',weights_only=False)
+    checkpoint = Path(cfg.training._trained_models_dir)/epoch/'state_dict.pkl'
+    state = torch.load(checkpoint,map_location='cpu',weights_only=False)
+    if not state or not results:
+        raise ValueError('Empty checkpoint or scored universe')
+    u2n,n2u = get_uuid_to_index_id(cfg)
+    save(cell/'uuid_mapping.json',{str(k):v for k,v in n2u.items()})
+    records=[]
+    for nid,r in results.items():
+        records.append({'node_id':int(nid),'uuid':n2u.get(int(nid)), 'score':float(r['score']),
+            'prediction':int(r['y_hat']),'gt':int(r['y_true']), 'score_direction':'higher_is_anomalous',
+            'threshold':float(r.get('decision_threshold',0)) if 'decision_threshold' in r else None,
+            'decision_rule':cfg.evaluation.node_evaluation.threshold_method,
+            'post_clustering':cfg.evaluation.node_evaluation.use_kmeans,
+            'time_range':r.get('time_range'),'max_loss_window':r.get('tw_with_max_loss')})
+    with (cell/'objects.jsonl').open('w') as f:
+        for r in records: f.write(json.dumps(r,allow_nan=False)+'\n')
+    ids={r['node_id'] for r in records}
+    missing=[]
+    for file in ground_truth_files(cfg):
+        for uuid,label in read_ground_truth_uuids(cfg,file):
+            if uuid not in u2n or u2n[uuid] not in ids:
+                missing.append({'uuid':uuid,'gt_file':file,'reason':'absent_from_database' if uuid not in u2n else 'not_scored'})
+    save(cell/'missing_gt.json',missing)
+    save(cell/'metrics.json',metrics(records))
+    save(cell/'checkpoint.json',{'path':str(checkpoint),'sha256':digest(checkpoint),
+         'state_dict_deserialized':True,'reconstructed_model_reload_verified':False})
+    # Full CSV losses, graph mappings, and preprocessing remain under artifacts/.
+
+
+def cli():
+    p=argparse.ArgumentParser(description=__doc__); sub=p.add_subparsers(dest='action',required=True)
+    prep=sub.add_parser('prepare');prep.add_argument('--output',type=Path,required=True)
+    r=sub.add_parser('run');r.add_argument('--dataset',choices=DATASETS,required=True)
+    r.add_argument('--model',choices=MODELS,required=True);r.add_argument('--mode',choices=['smoke','full'],required=True)
+    r.add_argument('--server-config',type=Path,required=True)
+    s=sub.add_parser('status');s.add_argument('directory',type=Path)
+    m=sub.add_parser('summarize');m.add_argument('objects',type=Path)
+    a=p.parse_args()
+    if a.action=='prepare': prepare(a.output)
+    elif a.action=='run': run(a)
+    elif a.action=='status':
+        print(json.dumps([{'file':str(f),**json.loads(f.read_text())} for f in sorted(a.directory.rglob('status.json'))],indent=2))
+    else:
+        print(json.dumps(metrics(json.loads(line) for line in a.objects.open()),indent=2))
+
+if __name__=='__main__': cli()
