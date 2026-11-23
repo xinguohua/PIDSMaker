@@ -44,6 +44,7 @@ def attach_prepared(cfg,source,cell,evidence_path):
         assert totals[split]==status['splits'][split]
     # Native payload is calculated from actual fused edges and float32/int64 shapes.
     tensor=status['native_dense_feature_tensor_bytes']
+    if tensor is None:raise ValueError('Native model-specific feature shape not measured; no Velox capacity extrapolation')
     eval_edges=sum(totals[k]['edges'] for k in ['val','test'])
     # Explicit estimated allowances, not claimed measurements: CSV lines, object exports,
     # fitted word2vec vocabulary/state and native serialization overhead.

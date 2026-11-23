@@ -171,6 +171,8 @@ def queue(args):
                     if prepared:
                         report=read(Path(prepared)/'status.json')
                         tensor=report['native_dense_feature_tensor_bytes']
+                        if tensor is None:
+                            row.update(state='capacity_unmeasured',blocker='Requires native model-specific materialized feature shape');continue
                         eval_edges=sum(report['splits'][s]['edges'] for s in ('val','test'))
                         required=tensor+max(64*1024**2,int(tensor*.02))+eval_edges*160+3*1024**3+64*1024**2+4*1024**3
                         row['capacity']={'free_bytes':free,'estimated_required_bytes':required,'basis':'measured prepared edges and native feature dimension; explicit serialization/fitted/output allowances'}

@@ -33,8 +33,9 @@ def prepare_native(cfg,cell,out,main):
         # Exact native dense tensor dimensions; serialization/CSV/model overhead separate.
         from pidsmaker.utils.dataset_utils import get_rel2id,get_node_map
         edge_types=max(v for v in get_rel2id(cfg).values() if type(v) is int);node_types=max(v for v in get_node_map().values() if type(v) is int)
-        tensor_bytes=total_edges*((2*cfg.featurization.emb_dim+2*node_types+edge_types)*4+4*8)
-        report={'state':'preparation_complete_pending_capacity','time':now(),'cell':str(cell),'splits':totals,'windows_ledger':str(ledger),'feature_dimension':cfg.featurization.emb_dim,'edge_types':edge_types,'node_types':node_types,'native_dense_feature_tensor_bytes':tensor_bytes,'capacity_note':'tensor bytes excludes serialization overhead, fitted feature models, full predictions and checkpoints; no smoke extrapolation','free_bytes':shutil.disk_usage(cell).free,'full_training_started':False,'raw_complete':False}
+        tensor_bytes=(total_edges*((2*cfg.featurization.emb_dim+2*node_types+edge_types)*4+4*8)
+                      if cfg.featurization.emb_dim is not None and cfg.featurization.used_method in ['word2vec','hierarchical_hashing'] else None)
+        report={'state':'preparation_complete_pending_capacity','time':now(),'cell':str(cell),'splits':totals,'windows_ledger':str(ledger),'feature_dimension':cfg.featurization.emb_dim,'edge_types':edge_types,'node_types':node_types,'native_dense_feature_tensor_bytes':tensor_bytes,'capacity_note':'null tensor bytes means model-specific materialized shape is not yet measured; do not apply Velox formula. Non-null tensor bytes excludes serialization overhead, fitted feature models, full predictions and checkpoints; no smoke extrapolation','free_bytes':shutil.disk_usage(cell).free,'full_training_started':False,'raw_complete':False}
         save(cell/'status.json',report);save(out/'summary.json',report)
     finally:
         stop.set();os.environ.pop('BASELINE_PREPARATION_LEDGER',None)
