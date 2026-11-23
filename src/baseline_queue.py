@@ -43,11 +43,24 @@ def persist(path,doc):
     out=Path(os.environ.get('RUN_OUTPUT_DIR',str(path.parent)));out.mkdir(parents=True,exist_ok=True)
     save(out/'summary.json',{'state':'queue_monitoring','canonical':str(path),'canonical_sha256':digest(path),'time':now(),'completed':sum(r['state']=='completed' for r in doc['rows']),'rows':doc['rows']})
 
-def launch_verify(run,config,cell):
+def available_devices(rows,devices):
+    active=[r for r in rows if r['active_run_id']]
+    devices=devices[:2]  # At most two native/verification workers in this matrix.
+    if len(active)>=len(devices):return []
+    busy={r.get('device_assignment',{}).get('physical_index',0) for r in active}
+    return [d for d in devices if d['physical_index'] not in busy]
+
+def worker_environment(device=None):
+    env={'PYTHONHASHSEED':'0','PYTHONDONTWRITEBYTECODE':'1','PYTHONUNBUFFERED':'1','OPENBLAS_NUM_THREADS':'1','OMP_NUM_THREADS':'1'}
+    if device:env['CUDA_VISIBLE_DEVICES']=str(device['physical_index'])
+    if os.environ.get('NLTK_DATA'):env['NLTK_DATA']=os.environ['NLTK_DATA']
+    return env
+
+def launch_verify(run,config,cell,device=None):
     destination=run/'verification'/('verify-'+git('rev-parse','--short','HEAD'))
     if not destination.exists():
         destination.mkdir(parents=True)
-        spec={'kind':'verify','cell':str(cell),'run':str(run),'config':str(config),'output':str(destination),'code':str(ROOT),'commit':git('rev-parse','HEAD')}
+        spec={'kind':'verify','cell':str(cell),'run':str(run),'config':str(config),'output':str(destination),'code':str(ROOT),'commit':git('rev-parse','HEAD'),'environment':worker_environment(device)}
         save(destination/'spec.json',spec)
         cmd=[sys.executable,str(ROOT/'src/baseline_queue.py'),'worker',str(destination/'spec.json')]
         import shlex
@@ -83,9 +96,10 @@ def launch_native(row,path,config,phase,prepared=None):
     command=[sys.executable,'src/baseline_server.py','run','--dataset',row['dataset'],'--model',row['model'],'--mode','full','--server-config',str(config)]
     if phase=='prepare':command+=['--stop-after-preparation']
     if prepared:command+=['--prepared-cell',str(prepared)]
-    meta={'run_id':rid,'commit':commit,'command':command,'phase':phase,'created_at':now(),'seed':0}
+    meta={'run_id':rid,'commit':commit,'command':command,'phase':phase,'created_at':now(),'seed':0,'device_assignment':row.get('device_assignment')}
     save(run/'meta.json',meta)
     spec={'kind':phase,'run':str(run),'config':str(config),'output':str(run),'code':str(run/'code'),'commit':commit,'command':command,'environment':{'RUN_ID':rid,'RUN_OUTPUT_DIR':str(run/'output'),'RUN_DIR':str(run/'output'),'PYTHONHASHSEED':'0','PYTHONDONTWRITEBYTECODE':'1'}}
+    spec['environment'].update(worker_environment(row.get('device_assignment')))
     save(run/'spec.json',spec);save(run/'status.json',{'state':'queued','time':now()})
     register(row,run)
     return run,spec
@@ -148,15 +162,16 @@ def queue(args):
                 if attempt['pipeline'].get('state')!='pipeline_finished_pending_acceptance':
                     attempt['failure']='Not a complete native full pipeline';row.update(state='failed',active_run_id=None);continue
                 row['state']='pipeline_finished_pending_acceptance'
-                dest=launch_verify(run,args.server_config,cell);attempt['verification_directory']=str(dest)
+                dest=launch_verify(run,args.server_config,cell,row.get('device_assignment'));attempt['verification_directory']=str(dest)
                 vstatus=read(dest/'status.json',{});attempt['verification_status']=vstatus
                 if vstatus.get('exit_code')==0:
                     try:accept(row,attempt,read(dest/'summary.json',{}))
                     except ValueError as e:attempt['failure']=str(e);row.update(state='acceptance_failed',active_run_id=None)
                 elif 'exit_code' in vstatus:
                     attempt['failure']='Verification failed; inspect '+str(dest/'run.log');row.update(state='acceptance_failed',active_run_id=None)
-            # One native worker at a time; independent missing inputs do not block later pairs.
-            if not doc['scheduler']['paused'] and not any(r['active_run_id'] for r in doc['rows']):
+            # Explicitly configured slots remain occupied through output verification.
+            slots=available_devices(doc['rows'],control.get('gpu_devices',[{'physical_index':0}]))
+            if not doc['scheduler']['paused'] and slots:
                 free=shutil.disk_usage(path.parent).free
                 server=read(args.server_config)
                 for row in doc['rows']:
@@ -179,6 +194,7 @@ def queue(args):
                         if required>free:
                             row.update(state='paused_capacity',blocker='Measured preparation capacity budget exceeds free bytes');continue
                     phase='full' if prepared else 'prepare'
+                    row['device_assignment']=slots[0]
                     run,spec=launch_native(row,path,args.server_config,phase,prepared)
                     # Publish ownership before tmux launch. A crash here is unresolved, never duplicated.
                     persist(path,doc)

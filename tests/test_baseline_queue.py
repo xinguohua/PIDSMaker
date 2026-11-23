@@ -1,7 +1,7 @@
 import json,sys,tempfile,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
-from baseline_queue import initialize,register,accept,REQUIRED
+from baseline_queue import initialize,register,accept,REQUIRED,available_devices,worker_environment
 from baseline_matrix import prepare
 class QueueTests(unittest.TestCase):
  def setUp(self):
@@ -26,6 +26,14 @@ class QueueTests(unittest.TestCase):
   register(self.row,self.root/'a');accept(self.row,self.row['attempts'][0],{'full_accepted':True,'checks':dict.fromkeys(REQUIRED,True)})
   self.assertEqual(self.row['state'],'completed')
   with self.assertRaises(ValueError):register(self.row,self.root/'b')
+ def test_two_slots_remain_reserved_through_verification(self):
+  devices=[{'physical_index':0},{'physical_index':1},{'physical_index':2}]
+  rows=[{'active_run_id':'training','device_assignment':devices[1]}, {'active_run_id':'checking','state':'pipeline_finished_pending_acceptance','device_assignment':devices[0]}]
+  self.assertEqual(available_devices(rows,devices),[])
+  rows[1]['active_run_id']=None
+  self.assertEqual(available_devices(rows,devices),[devices[0]])
+  self.assertEqual(worker_environment(devices[1])['CUDA_VISIBLE_DEVICES'],'1')
+  self.assertEqual(available_devices(rows,[devices[0]]),[])
 if __name__=='__main__':unittest.main()
 
 class RepairAcceptanceTests(unittest.TestCase):
