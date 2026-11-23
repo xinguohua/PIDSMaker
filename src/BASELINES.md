@@ -1,6 +1,6 @@
 # E3 baseline execution
 
-This entry reuses PIDSMaker's native pipeline and the project's existing remote.py/tmux controller. No data processing runs on the development laptop. Dependencies and server data have not yet been verified.
+This entry reuses PIDSMaker's native pipeline and the project's existing remote.py/tmux controller. No data processing runs on the development laptop. Native dependencies and existing database inputs are being verified by separately recorded server jobs; the 15 training cells are not accepted results.
 
 Static `prepare` exports the 15-row matrix and source-derived dates/GT hashes only. It neither prepares data nor verifies DB coverage. Use a new output directory to avoid replacing an existing ledger:
 
@@ -37,6 +37,10 @@ Fixed-budget checkpoints are saved after the existing evaluation transition flus
 
 Exports are staged before publication. `export_complete.json` is written last and hashes each output; absent marker means unusable export. Missing optional metadata and non-finite optional values become null with per-object `export_issues`; invalid required scores or labels fail export rather than become zeros. `export_failed.json` records failure without publishing partial object files. A failed export or lost tmux process is not completion. Preserve logs/artifacts, diagnose the failed stage, commit any correction, and start a new run ID; do not rerun into the existing cell or hand-edit its status. All five resolved configurations use node_evaluation; native internal windows do not imply window-level reported metrics.
 
-Local regression: `python -m unittest discover -s tests -p 'test_baseline*.py' -v`. Real TGN test requires torch and torch_geometric; a skip is an outstanding dependency/verification item. No local test processes APT data or trains a detector. The current revision has not been pushed or run on the server.
+Local regression: `python -m unittest discover -s tests -p 'test_baseline*.py' -v`. Real TGN test requires torch and torch_geometric; a skip is an outstanding dependency/verification item. No local test processes APT data or trains a detector. Fixed commits have been pushed and deployed for native preflight and read-only data audits; see the outer project run ledger. Those jobs are not detector-training acceptance.
 
 Summarize now validates the completion marker, the exact five export files and their SHA256 hashes, and rejects export_failed.json or a failed cell. The regression suite covers interruption after publication of objects but before the marker and tampering with every export file.
+
+Server launch uses `src/baseline_server.py run ... --server-config <private JSON>` when the existing Docker service is the credential source. `server_credentials.py` reads only the configured container environment variable into memory. The private JSON can specify `credential_container` and `credential_variable`; neither a secret value nor the filled JSON belongs in Git. A manifest can restrict `allowed_modes` to `smoke`; such a manifest is rejected by full runs. These restrictions do not replace actual data verification.
+
+`src/baseline_preflight.py` runs real native imports, five resolved configurations, and the real TGN checkpoint test. `src/baseline_data_audit.py` performs sequential, read-only PostgreSQL counts and GT/UUID checks with statement and temporary-file limits. A timed-out query is recorded, never replaced with a catalog estimate. `--dates-only --statement-timeout-seconds 300` retries only the missing date coverage without repeating the completed mapping audit.
