@@ -106,6 +106,12 @@ def queue(args):
         while True:
             control=read(path.parent/'control.json',{})
             doc['scheduler']={'paused':control.get('paused',True),'time':now(),'reason':control.get('reason','Fail closed: explicit resume required')}
+            for request in control.get('repair_attempts',[]):
+                row=next(r for r in doc['rows'] if r['dataset']==request['dataset'] and r['model']==request['model'])
+                run=Path(request['path'])
+                if run.name not in row['attempt_ids']:
+                    register(row,run);row['attempts'][-1]['kind']='prediction_repair'
+                    row['attempts'][-1]['original_training_run_id']=request['original_training_run_id']
             for row in doc['rows']:
                 if not row['active_run_id']:continue
                 attempt=next(a for a in row['attempts'] if a['run_id']==row['active_run_id'])
@@ -115,6 +121,19 @@ def queue(args):
                 terminal='exit_code' in status
                 if not terminal:
                     if not observed['tmux_alive']:row['state']='active_liveness_unknown'
+                    continue
+                if attempt.get('kind')=='prediction_repair' and status.get('exit_code')==0:
+                    evidence=read(run/'output/summary.json',{})
+                    resources=read(run/'output/resources/process_resources_summary.json',{})
+                    if evidence.get('repaired_predictions_verified') and resources.get('exit_code')==0 and not resources.get('disk_guard_triggered') and resources.get('sampled_peak_tree_rss_bytes',0)>0:
+                        evidence=dict(evidence,full_accepted=True,acceptance_scope='Derived corrected inference with immutable original full training lineage',resource_evidence=resources)
+                        try:
+                            accept(row,attempt,evidence)
+                            attempt['evidence_sha256']=digest(run/'output/summary.json')
+                        except ValueError as e:
+                            attempt['failure']=str(e);row.update(state='acceptance_failed',active_run_id=None)
+                    else:
+                        attempt['failure']='Repair replay or real process-resource evidence incomplete';row.update(state='acceptance_failed',active_run_id=None)
                     continue
                 if status['exit_code']!=0:
                     attempt['failure']=status;row.update(state='failed',active_run_id=None);continue
@@ -166,7 +185,7 @@ def queue(args):
                     start_native(run,spec)
                     break
             persist(path,doc)
-            if args.once:return
+            if args.once or control.get('stop_controller',False):return
             time.sleep(30)
 
 if __name__=='__main__':

@@ -27,3 +27,14 @@ class QueueTests(unittest.TestCase):
   self.assertEqual(self.row['state'],'completed')
   with self.assertRaises(ValueError):register(self.row,self.root/'b')
 if __name__=='__main__':unittest.main()
+
+class RepairAcceptanceTests(unittest.TestCase):
+ def test_missing_coverage_is_rejected_even_after_repair(self):
+  row={'accepted_run_id':None};attempt={'run_id':'derived'}
+  evidence={'full_accepted':True,'checks':dict.fromkeys(REQUIRED,True)}
+  del evidence['checks']['independent_coverage']
+  with self.assertRaises(ValueError):accept(row,attempt,evidence)
+ def test_failed_original_history_survives_derived_acceptance(self):
+  row={'accepted_run_id':None,'attempt_ids':['original','derived'],'attempts':[{'run_id':'original','failure':'1024 overwritten scores'},{'run_id':'derived'}]}
+  accept(row,row['attempts'][1],{'full_accepted':True,'checks':dict.fromkeys(REQUIRED,True)})
+  self.assertEqual(row['attempts'][0]['failure'],'1024 overwritten scores');self.assertEqual(row['accepted_run_id'],'derived')

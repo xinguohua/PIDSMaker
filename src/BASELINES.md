@@ -149,3 +149,13 @@ memory and per-process GPU memory, elapsed time and filesystem net growth. These
 are sampled, not exact continuous peaks; filesystem/device totals include other
 jobs. A 4GiB guard terminates only the wrapper's own child process group. Original
 ad81 total RSS/VRAM cannot be reconstructed retrospectively and remain unavailable.
+
+Explicit controls from the current fixed server code:
+`python src/baseline_matrix.py control --canonical /mnt/bigdata/nsas2020/tdsc-runs/baseline-matrix/matrix.json --paused true --reason 'verification repair'`.
+Add `--stop-controller` for graceful exit after reconciliation; worker tmux sessions
+are untouched. Resume scheduling requires paused=false and must not be confused
+with launching a paused controller using `resume`. The control record may register
+a `repair_attempts` list with dataset/model/path/original_training_run_id. The
+single canonical writer accepts a derived repair only after full replay checks
+and successful real process-resource supervision, preserving the original failed
+attempt. Training resource gaps remain explicitly recorded in the repair lineage.

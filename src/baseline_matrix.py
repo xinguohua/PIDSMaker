@@ -349,7 +349,13 @@ def cli():
         q=sub.add_parser(command);q.add_argument('--canonical',type=Path,required=True);q.add_argument('--server-config',type=Path,required=True);q.add_argument('--adopt-run',type=Path);q.add_argument('--once',action='store_true')
     q=sub.add_parser('query');q.add_argument('--canonical',type=Path,required=True)
     q=sub.add_parser('verify');q.add_argument('--cell',type=Path,required=True);q.add_argument('--server-config',type=Path,required=True);q.add_argument('--full',action='store_true');q.add_argument('--repair-predictions',action='store_true')
+    q=sub.add_parser('control');q.add_argument('--canonical',type=Path,required=True);q.add_argument('--paused',choices=['true','false'],required=True);q.add_argument('--reason',required=True);q.add_argument('--stop-controller',action='store_true')
     a=p.parse_args()
+    if a.action=='control':
+        path=a.canonical.parent/'control.json'
+        value=json.loads(path.read_text()) if path.exists() else {}
+        value.update(paused=a.paused=='true',reason=a.reason,stop_controller=a.stop_controller,time=now())
+        save(path,value);print(json.dumps(value));return
     if a.action in ['queue','resume']:
         from baseline_queue import queue
         return queue(a)
