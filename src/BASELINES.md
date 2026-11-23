@@ -56,3 +56,54 @@ Four operations: (1) `run --mode smoke` validates bounded native execution; (2) 
 Preparation writes windows.jsonl (split/date/window, native filtered events, dedup events, fused edges, node occurrences, serialized bytes) and disk_progress.json. It keeps 4 GiB disk reserve under a one-second watchdog; a reserve stop exits74 and retains partial new artifacts. No old cache or learned states are deleted. The maximum allowed new write budget is initial free minus reserve, not an assertion that the stage will fit. Measured tensor payload uses the actual fused edge count, native float32 message dimensions and four int64 vectors; serialization/model/prediction overhead remains separate.
 
 Full continuation after this run's preparation: supply `--prepared-cell /SERVER_PREPARATION/output/CADETS_E3-velox-full` to the normal full command. The runner requires a completed preparation, the same input-manifest digest, full effective settings, matching native Python/config source hashes, exact expected dates and window sizes. It hashes the graph and dictionary files, shares only `nx` and `indexid2msg` read-only, and copies tiny native done markers into the new task directories. Logs, feature fitting, features, checkpoints, predictions and evaluation caches remain in the new run. Native task restart checks must skip construction/transformation. `prepared_reuse.json` retains source-to-target links, hashes, measured counts, exact tensor payload and explicitly estimated storage allowances. A 4GiB reserve monitor stops without deletion if space unexpectedly falls below reserve. Preparation/full completion still requires independent acceptance; no tuning on test labels.
+
+## Persistent canonical queue (2026-11-23)
+
+Canonical server ledger: `/mnt/bigdata/nsas2020/tdsc-runs/baseline-matrix/matrix.json`.
+`prepare` now leaves an existing matrix untouched. Only the locked server queue
+mutates the canonical ledger; local `baseline_manifest/matrix.json` is a downloaded
+mirror, not scheduling authority. Other phase ledgers are historical snapshots.
+The queue retains all attempt IDs, original metadata, observed controller exit,
+pipeline status, verification directory and first accepted run. Exit zero alone
+never grants completion. CAD Velox's existing ad81 run is adopted, not relaunched.
+
+Actual server commands (use the verified detector Python, not controller Python):
+
+```sh
+python src/baseline_matrix.py query --canonical /mnt/bigdata/nsas2020/tdsc-runs/baseline-matrix/matrix.json
+python src/baseline_matrix.py resume --canonical /mnt/bigdata/nsas2020/tdsc-runs/baseline-matrix/matrix.json --server-config /mnt/bigdata/nsas2020/tdsc-config/velox-db-baselines-v1.json
+python src/baseline_matrix.py verify --full --cell /mnt/bigdata/nsas2020/tdsc-runs/cadets-velox-full-20261123a/output/CADETS_E3-velox-full --server-config /mnt/bigdata/nsas2020/tdsc-config/velox-db-baselines-v1.json
+```
+
+`verify` requires a **new** server RUN_OUTPUT_DIR. Queue invokes it automatically
+in a separate persistent tmux and retains its logs. Do not manually invoke a second
+verification while it is active. `resume` requires RUN_OUTPUT_DIR for the queue's
+small progress mirror and exits if another writer holds the advisory lock.
+`--adopt-run /mnt/bigdata/nsas2020/tdsc-runs/cadets-velox-full-20261123a`
+is supported on `queue`/`resume`. `--once` performs one reconciliation.
+Existing `run`, `status`, `summarize` remain available; direct `run` is standalone
+and must be registered before the queue can own it. Summarize is hash/metric checking,
+not full acceptance.
+
+After resolving the imported active run, the queue advances CAD remaining four,
+THEIA five, CLEARSCOPE five. It checks full-mode input evidence, runs a fresh native
+preparation in an independent fixed local clone of the deployed public snapshot,
+then checks measured edge/dimension capacity before full continuation. Only verified
+same-model native preparation is shared by the existing attach_prepared helper.
+No old cache is assumed compatible and no files are deleted. Preparation and workers
+have 4GiB disk guards. Capacity estimates explicitly include allowances; they are not
+measurements. Capacity-paused rows are reconsidered on each reconciliation.
+An ambiguous interrupted launch stays active/unknown and is never duplicated.
+Failures retain artifacts and the queue advances independent rows, without test ranking.
+
+Acceptance currently qualifies **Velox edge-level replay only**. Other detector
+pipelines may execute but remain acceptance_blocked until their fitted/online state
+and independent coverage protocols are implemented and actually verified. No local
+unit test establishes model verification. Velox verification reuses the smoke tool,
+checks native preprocessed edge identities against every val/test CSV, reconciles
+full split edge totals and prepared input/source/GT hashes, checks the test node
+universe, rebuilds a seeded native model and loads its learned checkpoint, replays
+val then test, reruns native threshold/evaluation/export in a separate directory,
+compares continuous scores/decisions/metrics/mapping, and hashes source artifacts
+before and after. Mismatch fails closed. Native raw filtering exclusions remain in
+the preparation/input evidence; this does not prove raw dump equivalence.

@@ -81,6 +81,8 @@ def metrics(rows):
 
 def prepare(output):
     output.mkdir(parents=True, exist_ok=True)
+    if (output/'matrix.json').exists():
+        return  # Existing ledger is never reset.
     save(output/'matrix.json', matrix())
     p = protocol()
     for d, v in p.items():
@@ -343,7 +345,20 @@ def cli():
     r.add_argument('--prepared-cell',type=Path)
     s=sub.add_parser('status');s.add_argument('directory',type=Path)
     m=sub.add_parser('summarize');m.add_argument('objects',type=Path)
+    for command in ['queue','resume']:
+        q=sub.add_parser(command);q.add_argument('--canonical',type=Path,required=True);q.add_argument('--server-config',type=Path,required=True);q.add_argument('--adopt-run',type=Path);q.add_argument('--once',action='store_true')
+    q=sub.add_parser('query');q.add_argument('--canonical',type=Path,required=True)
+    q=sub.add_parser('verify');q.add_argument('--cell',type=Path,required=True);q.add_argument('--server-config',type=Path,required=True);q.add_argument('--full',action='store_true')
     a=p.parse_args()
+    if a.action in ['queue','resume']:
+        from baseline_queue import queue
+        return queue(a)
+    if a.action=='query':
+        print(a.canonical.read_text());return
+    if a.action=='verify':
+        cmd=[sys.executable,str(ROOT/'src/verify_native_smoke.py'),'--cell',str(a.cell),'--server-config',str(a.server_config)]
+        if a.full:cmd.append('--full')
+        raise SystemExit(subprocess.call(cmd))
     if a.action=='prepare': prepare(a.output)
     elif a.action=='run': run(a)
     elif a.action=='status':
