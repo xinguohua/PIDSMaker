@@ -348,7 +348,7 @@ def cli():
     for command in ['queue','resume']:
         q=sub.add_parser(command);q.add_argument('--canonical',type=Path,required=True);q.add_argument('--server-config',type=Path,required=True);q.add_argument('--adopt-run',type=Path);q.add_argument('--once',action='store_true')
     q=sub.add_parser('query');q.add_argument('--canonical',type=Path,required=True)
-    q=sub.add_parser('verify');q.add_argument('--cell',type=Path,required=True);q.add_argument('--server-config',type=Path,required=True);q.add_argument('--full',action='store_true')
+    q=sub.add_parser('verify');q.add_argument('--cell',type=Path,required=True);q.add_argument('--server-config',type=Path,required=True);q.add_argument('--full',action='store_true');q.add_argument('--repair-predictions',action='store_true')
     a=p.parse_args()
     if a.action in ['queue','resume']:
         from baseline_queue import queue
@@ -358,6 +358,7 @@ def cli():
     if a.action=='verify':
         cmd=[sys.executable,str(ROOT/'src/verify_native_smoke.py'),'--cell',str(a.cell),'--server-config',str(a.server_config)]
         if a.full:cmd.append('--full')
+        if a.repair_predictions:cmd.append('--repair-predictions')
         raise SystemExit(subprocess.call(cmd))
     if a.action=='prepare': prepare(a.output)
     elif a.action=='run': run(a)

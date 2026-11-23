@@ -1330,6 +1330,8 @@ def load_losses_per_time_window(losses_dir, cfg, max_unmatched_ratio=0.01):
 
 
 def datetime_to_ns_time_US_handle_nano(nano_date_str, timezone="US/Eastern"):
+    from pidsmaker.utils.prediction_identity import timestamp_part
+    nano_date_str = timestamp_part(nano_date_str)
     date = nano_date_str.split(".")[0]
     nanos = nano_date_str.split(".")[1]
 

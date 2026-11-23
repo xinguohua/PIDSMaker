@@ -59,12 +59,14 @@ def worker(spec_path):
     cmd=spec.get('command') or [sys.executable,str(ROOT/'src/verify_native_smoke.py'),'--cell',spec['cell'],'--server-config',spec['config'],'--full']
     env.update(spec.get('environment',{}))
     save(out/'status.json',{'state':'running','pid':os.getpid(),'time':now(),'commit':spec['commit']})
+    cmd=[sys.executable,str(ROOT/'src/process_resources.py'),str(out/'resource_evidence'),'--',*cmd]
     with (out/'run.log').open('a') as f:
         p=subprocess.Popen(cmd,env=env,cwd=spec['code'],stdout=f,stderr=subprocess.STDOUT)
         while p.poll() is None:
             free=shutil.disk_usage(out).free
             save(out/'disk.json',{'time':now(),'free_bytes':free,'reserve':4*1024**3})
-            if free<4*1024**3:p.terminate();p.wait();break
+            if free<4*1024**3:
+                save(out/'disk_guard_waiting.json',{'time':now(),'owner':'process_resources supervisor','free_bytes':free})
             time.sleep(2)
         code=p.returncode
     save(out/'status.json',{'state':'finished' if code==0 else 'failed','exit_code':code,'time':now()})

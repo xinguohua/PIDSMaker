@@ -2,6 +2,7 @@ import os
 import random
 import time
 import tracemalloc
+from pidsmaker.utils.prediction_identity import prediction_name
 
 import numpy as np
 import pandas as pd
@@ -27,6 +28,7 @@ def test_edge_level(
     model_epoch_file,
     cfg,
     device,
+    batch_identity=None,
 ):
     model.eval()
 
@@ -70,7 +72,11 @@ def test_edge_level(
 
     logs_dir = os.path.join(cfg.training._edge_losses_dir, split, model_epoch_file)
     os.makedirs(logs_dir, exist_ok=True)
-    csv_file = os.path.join(logs_dir, time_interval + ".csv")
+    if batch_identity is None:
+        raise ValueError("Inference requires explicit stable group/batch identity")
+    csv_file = os.path.join(logs_dir, prediction_name(time_interval,*batch_identity) + ".csv")
+    if os.path.exists(csv_file):
+        raise FileExistsError("Refusing to overwrite native prediction batch: " + csv_file)
 
     edge_df.to_csv(csv_file, sep=",", header=True, index=False, encoding="utf-8")
     return all_losses
@@ -84,6 +90,7 @@ def test_node_level(
     model_epoch_file,
     cfg,
     device,
+    batch_identity=None,
 ):
     model.eval()
 
@@ -250,7 +257,11 @@ def test_node_level(
 
     logs_dir = os.path.join(cfg.training._edge_losses_dir, split, model_epoch_file)
     os.makedirs(logs_dir, exist_ok=True)
-    csv_file = os.path.join(logs_dir, time_interval + ".csv")
+    if batch_identity is None:
+        raise ValueError("Inference requires explicit stable group/batch identity")
+    csv_file = os.path.join(logs_dir, prediction_name(time_interval,*batch_identity) + ".csv")
+    if os.path.exists(csv_file):
+        raise FileExistsError("Refusing to overwrite native prediction batch: " + csv_file)
 
     df = pd.DataFrame(node_list)
     df.to_csv(csv_file, sep=",", header=True, index=False, encoding="utf-8")
@@ -297,8 +308,8 @@ def main(cfg, model, val_data, test_data, epoch, split, logging=True, train_data
         tracemalloc.start()
 
         all_losses = []
-        for graphs in dataset:
-            for g in log_tqdm(graphs, desc=desc, logging=logging):
+        for group_index,graphs in enumerate(dataset):
+            for batch_index,g in enumerate(log_tqdm(graphs, desc=desc, logging=logging)):
                 g.to(device=device)
 
                 s = time.time()
@@ -310,6 +321,7 @@ def main(cfg, model, val_data, test_data, epoch, split, logging=True, train_data
                     model_epoch_file=model_epoch_file,
                     cfg=cfg,
                     device=device,
+                    batch_identity=(group_index,batch_index),
                 )
                 all_losses.extend(losses)
                 tpb.append(time.time() - s)

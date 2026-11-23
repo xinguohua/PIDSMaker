@@ -107,3 +107,45 @@ val then test, reruns native threshold/evaluation/export in a separate directory
 compares continuous scores/decisions/metrics/mapping, and hashes source artifacts
 before and after. Mismatch fails closed. Native raw filtering exclusions remain in
 the preparation/input evidence; this does not prove raw dump equivalence.
+
+### Coverage repair and scheduler pause
+
+The actual ad81 test export collided at batches 1408/1409, both named
+`2018-04-12 11:52:09.266362231~2018-04-12 11:54:11.446358030.csv`.
+The surviving file equals batch 1409; 1024 identities are absent. Validation's
+566 batch identity multisets are complete. This is not timestamp truncation.
+New native CSV names retain nanoseconds and append stable group/batch IDs.
+Evaluation removes only that suffix when parsing time bounds. Existing files are
+never overwritten. Legacy exports require explicit collision diagnostics/repair.
+
+`verify --full --repair-predictions` reuses the recorded trained checkpoint,
+records original train commit/config/checkpoint hashes and corrected inference
+commit, writes new predictions, and reconstructs a second fresh model for a second
+native val->test replay. Corrected and independent exports must agree, including
+all score identities, thresholds, decisions and metrics. It does not relabel the
+original failed attempt accepted. A derived attempt needs canonical review of
+its lineage and resource evidence. No metric-based attempt selection is allowed.
+Original manifests remain immutable; the inaccurate old no-sharing cache text is
+superseded only by a separate provenance correction referencing prepared_reuse.json.
+
+The scheduler now defaults to paused. Its canonical sibling `control.json` contains
+`{"paused":true,"reason":"..."}`; atomic replacement with paused=false requests
+resume only after required verifier capability and resources are qualified.
+While paused it reconciles active worker state but launches no native tasks.
+Non-Velox full launches remain blocked until independent model qualification;
+implemented replay profiles are not evidence that those models passed.
+
+Native checkpoint persistence now records inference-relevant non-state_dict state
+and RNG snapshots. OCR-APT restores c/r buffers and frozen-type state; Orthrus and
+KAIROS restore TGN buffers/messages and replay val then test without reset;
+MAGIC uses isolated native validation sampling/calibration and compares the
+resulting train_distance artifact. RNG snapshots document checkpoint state; native
+inference's existing set_seed reset is preserved. Fitted feature states are hashed.
+Missing required state artifacts fail explicitly rather than inventing state.
+
+`process_resources.py OUTPUT -- COMMAND ...` wraps each future queue worker and
+records process-tree summed RSS (shared pages may be counted twice), NVIDIA device
+memory and per-process GPU memory, elapsed time and filesystem net growth. These
+are sampled, not exact continuous peaks; filesystem/device totals include other
+jobs. A 4GiB guard terminates only the wrapper's own child process group. Original
+ad81 total RSS/VRAM cannot be reconstructed retrospectively and remain unavailable.

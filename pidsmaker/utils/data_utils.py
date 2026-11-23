@@ -938,6 +938,8 @@ def save_model(model, path: str):
         os.path.join(path, "state_dict.pkl"),
         pickle_protocol=pickle.HIGHEST_PROTOCOL,
     )
+    from pidsmaker.utils.replay_state import save_replay_state
+    save_replay_state(model, path)
 
 
 def load_model(model, path: str):
