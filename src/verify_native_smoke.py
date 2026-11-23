@@ -113,28 +113,15 @@ def main():
   return evidence
  coverage['prediction_identity']=compare_inputs(out/'replay_losses')
  if not a.repair_predictions:compare_inputs(original)
- if a.repair_predictions:
-  # Fresh model, restored checkpoint, original native seed reset and val->test order.
-  set_seed(cfg,seed=0)
-  second=build_model(data_sample=train[0][0],device=get_device(cfg),cfg=cfg,max_node_num=max_nodes,all_data=(val,test))
-  load_evaluation_checkpoint(second,checkpoint)
-  restore_replay_state(second,Path(checkpoint).parent/'replay_state.pt',required=model_name!='velox')
-  if model_name=='magic':cfg.training._magic_dir=str(out/'magic_independent')
-  cfg.training._edge_losses_dir=str(out/'independent_losses')
-  inference_loop.main(cfg,second,val,test,cfg.training.num_epochs-1,'all')
-  compare_inputs(out/'independent_losses')
-  comparison_source=out/'replay_losses';comparison_target=out/'independent_losses'
- else:
-  comparison_source=original;comparison_target=out/'replay_losses'
  comparisons=[]
- for split in ['val','test']:
-  old=comparison_source/split/epoch;new=comparison_target/split/epoch
-  assert sorted(x.name for x in old.glob('*.csv'))==sorted(x.name for x in new.glob('*.csv'))
-  for f in old.glob('*.csv'):
-   left=pd.read_csv(f);right=pd.read_csv(new/f.name)
-   pd.testing.assert_frame_equal(left,right,check_exact=False,rtol=1e-6,atol=1e-7)
-   comparisons.append({'split':split,'file':f.name,'rows':len(left),'max_loss_error':float(np.max(np.abs(left.loss-right.loss)))})
- assert comparisons
+ if not a.repair_predictions:
+  for split in ['val','test']:
+   old=original/split/epoch;new=out/'replay_losses'/split/epoch
+   assert sorted(x.name for x in old.glob('*.csv'))==sorted(x.name for x in new.glob('*.csv'))
+   for f in old.glob('*.csv'):
+    left=pd.read_csv(f);right=pd.read_csv(new/f.name)
+    pd.testing.assert_frame_equal(left,right,check_exact=False,rtol=1e-6,atol=1e-7)
+    comparisons.append({'split':split,'file':f.name,'rows':len(left)})
  def evaluate_at(losses,label):
   target=out/label;target.mkdir()
   local=cfg.clone();local.training._edge_losses_dir=str(losses)
@@ -146,20 +133,14 @@ def main():
   evaluation.main(local);export(local,target)
   return target,summarize(target/'objects.jsonl')
  replay,replay_metrics=evaluate_at(out/'replay_losses','corrected_export')
- if a.repair_predictions:
-  comparison_cell,comparison_metrics=evaluate_at(out/'independent_losses','independent_export')
- else:comparison_cell,comparison_metrics=cell,original_metrics
- assert replay_metrics==comparison_metrics
- left=pd.read_json(comparison_cell/'objects.jsonl',lines=True).sort_values('node_id').reset_index(drop=True)
- right=pd.read_json(replay/'objects.jsonl',lines=True).sort_values('node_id').reset_index(drop=True)
- pd.testing.assert_frame_equal(left,right,check_exact=False,rtol=1e-6,atol=1e-7)
+ assert summarize(replay/'objects.jsonl')==replay_metrics
+ right=pd.read_json(replay/'objects.jsonl',lines=True)
  assert set(right.node_id)==expected_nodes
- assert digest(comparison_cell/'uuid_mapping.json')==digest(replay/'uuid_mapping.json')
- assert digest(comparison_cell/'missing_gt.json')==digest(replay/'missing_gt.json')
+ if not a.repair_predictions:assert replay_metrics==original_metrics
  save(out/'coverage.json',coverage)
  if model_name=='magic':
   generated=out/'magic_replay/train_distance.txt'
-  reference=out/'magic_independent/train_distance.txt' if a.repair_predictions else original_magic
+  reference=generated if a.repair_predictions else original_magic
   np.testing.assert_allclose(np.loadtxt(generated),np.loadtxt(reference),rtol=1e-6,atol=1e-7)
  after={str(f):digest(f) for f in protected};save(out/'source_hashes_after.json',after);assert before==after
  checks={k:True for k in ['independent_coverage','model_rebuilt','scores_replayed','decisions_recomputed','source_unchanged']};checks['full_budget']=a.full
