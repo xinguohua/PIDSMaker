@@ -17,6 +17,7 @@ from pidsmaker.featurization.feat_inference_methods import (
 )
 from pidsmaker.featurization.feat_inference_methods.feat_inference_pretrained import GraphBasedEncoder
 from pidsmaker.utils.data_utils import CollatableTemporalData
+from pidsmaker.utils.feature_cache import save_feature_data
 from pidsmaker.utils.dataset_utils import get_node_map, get_rel2id
 from pidsmaker.utils.utils import (
     gen_relation_onehot,
@@ -149,7 +150,9 @@ def feat_inference(indexid2vec, etype2oh, ntype2oh, sorted_paths, out_dir, cfg, 
 
         os.makedirs(out_dir, exist_ok=True)
         file = path.split("/")[-1]
-        torch.save(data, os.path.join(out_dir, f"{file}.TemporalData.simple"))
+        save_feature_data(data, os.path.join(out_dir, f"{file}.TemporalData.simple"),
+                          getattr(cfg, '_feature_cache_format', 'dense'),
+                          next(iter(etype2oh.values())).numel())
 
 
 def get_indexid2vec(cfg):

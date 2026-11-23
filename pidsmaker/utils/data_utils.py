@@ -161,10 +161,11 @@ def load_all_datasets(cfg, device, only_keep=None):
 
 
 def load_data_list(path, split, cfg):
+    from pidsmaker.utils.feature_cache import load_feature_data
     data_list = []
     for f in sorted(os.listdir(os.path.join(path, split))):
         filepath = os.path.join(path, split, f)
-        data = torch.load(filepath).to("cpu")
+        data = load_feature_data(filepath).to("cpu")
         data_list.append(data)
 
     data_list = extract_msg_from_data(data_list, cfg)

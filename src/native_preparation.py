@@ -3,6 +3,14 @@ import json,os,shutil,threading,time
 from pathlib import Path
 from baseline_matrix import save,now
 
+def feature_storage_capacity(report, cache_format='dense'):
+    if cache_format == 'dense':return report['native_dense_feature_tensor_bytes']
+    if cache_format != 'node_table_v1':raise ValueError('Unknown cache format')
+    width=report['node_types']+report['feature_dimension'];edge_width=report['edge_types']
+    # Graph node count bounds the window-local table. Original int64 src/dst/t/y
+    # plus three int64 lookup indices per edge; native one-hot edge type table.
+    return sum(s['nodes']*width*4+s['edges']*56+s['windows']*(edge_width+1)*edge_width*4 for s in report['splits'].values())
+
 def dense_tensor_capacity(features, total_edges, node_types, edge_types, ocr_histogram_bins=None):
     """Size the tensors saved by feat_inference, excluding file and object overhead."""
     method = features.used_method.strip()

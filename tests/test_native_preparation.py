@@ -5,10 +5,15 @@ from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from native_preparation import dense_tensor_capacity
+from native_preparation import dense_tensor_capacity, feature_storage_capacity
 
 
 class CapacityTests(unittest.TestCase):
+    def test_compact_bound_counts_nodes_and_indices_without_prepared_graphs(self):
+        report={'native_dense_feature_tensor_bytes':112000,'node_types':3,'feature_dimension':128,'edge_types':10,
+                'splits':{'train':{'nodes':8,'edges':100,'windows':2,'bytes':999999}}}
+        self.assertEqual(feature_storage_capacity(report),112000)
+        self.assertEqual(feature_storage_capacity(report,'node_table_v1'),8*131*4+100*56+2*11*10*4)
     def test_ocrapt_uses_behavior_columns_when_embedding_dimension_is_unset(self):
         options = SimpleNamespace(use_lifespan=False, use_cumulative_active_time=False)
         features = SimpleNamespace(used_method='ocrapt_features', emb_dim=None, ocrapt_features=options)

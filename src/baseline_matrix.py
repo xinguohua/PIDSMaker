@@ -152,6 +152,9 @@ def run(args):
         parsed.database_port = db['port']
         parsed.database_password = os.environ[db['password_env']]
         cfg = get_yml_cfg(parsed)
+        cfg._feature_cache_format = server.get('feature_cache_formats',{}).get(args.dataset+'/'+args.model,'dense')
+        if cfg._feature_cache_format != 'dense' and cfg.featurization.used_method != 'word2vec':
+            raise ValueError('Compact baseline cache is qualified only for static word2vec')
         if args.prepared_cell:
             from prepared_reuse import attach_prepared
             attach_prepared(cfg, args.prepared_cell, cell, evidence_path)

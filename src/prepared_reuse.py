@@ -44,17 +44,19 @@ def attach_prepared(cfg,source,cell,evidence_path):
         totals[split]['windows']=len(rr)
         assert totals[split]==status['splits'][split]
     # Native payload is calculated from actual fused edges and float32/int64 shapes.
-    tensor=status['native_dense_feature_tensor_bytes']
+    from native_preparation import feature_storage_capacity
+    cache_format=getattr(cfg,'_feature_cache_format','dense')
+    tensor=feature_storage_capacity(status,cache_format)
     if tensor is None:raise ValueError('Native model-specific feature shape not measured; no Velox capacity extrapolation')
     eval_edges=sum(totals[k]['edges'] for k in ['val','test'])
     # Explicit estimated allowances, not claimed measurements: CSV lines, object exports,
     # fitted word2vec vocabulary/state and native serialization overhead.
-    estimate={'tensor_payload_exact':tensor,'tensor_serialization_allowance':max(64*1024**2,int(tensor*.02)),
+    estimate={'tensor_payload_upper_bound':tensor,'tensor_serialization_allowance':max(64*1024**2,int(tensor*.02)),
       'val_test_csv_allowance':eval_edges*160,'fitted_feature_states_allowance':128*1024**2,
       'mapping_object_metrics_allowance':256*1024**2,'checkpoint_allowance':64*1024**2,
       'reserve':512*1024**2}
     free=shutil.disk_usage(cell).free
-    report={'time':now(),'source':str(source),'source_commit':meta['commit'],'input_sha256':meta['input_sha256'],
+    report={'time':now(),'source':str(source),'source_commit':meta['commit'],'input_sha256':meta['input_sha256'],'feature_cache_format':cache_format,
       'native_source_hashes':checked_source,'graph_hashes':files,'splits':totals,'capacity':estimate,
       'free_bytes':free,'required_additional_with_reserve':sum(estimate.values()),
       'configured_dates_without_graphs':sorted(expected-bydate),'links':[]}
