@@ -83,10 +83,12 @@ def main():
  save(out/'coverage.json',coverage)
  set_seed(cfg,seed=0)
  model=build_model(data_sample=train[0][0],device=get_device(cfg),cfg=cfg,max_node_num=max_nodes,all_data=(val,test))
- initial={k:v.detach().cpu().clone() for k,v in model.named_parameters()}
+ # Lazy parameters have no seeded tensor until materialized; checkpoint loading
+ # handles them. Compare learned changes only against actual initial tensors.
+ initial={k:v.detach().cpu().clone() for k,v in model.named_parameters() if not torch.nn.parameter.is_lazy(v)}
  load_evaluation_checkpoint(model,checkpoint)
  restored=restore_replay_state(model,Path(checkpoint).parent/'replay_state.pt',required=model_name!='velox')
- changed=[k for k,v in model.named_parameters() if not torch.equal(initial[k],v.detach().cpu())]
+ changed=[k for k,v in model.named_parameters() if k in initial and not torch.nn.parameter.is_lazy(v) and not torch.equal(initial[k],v.detach().cpu())]
  assert changed, 'No learned parameter differs from seeded initialization'
  original_magic=Path(cfg.training._magic_dir)/'train_distance.txt' if model_name=='magic' else None
  if model_name=='magic' and not a.check_only:cfg.training._magic_dir=str(out/'magic_replay')
