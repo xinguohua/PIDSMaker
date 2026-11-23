@@ -9,3 +9,12 @@ class IdentityTests(unittest.TestCase):
   self.assertNotEqual(a,b);self.assertEqual(m.timestamp_part(a),interval);self.assertEqual(m.timestamp_part(b),interval)
  def test_legacy_unchanged(self):self.assertEqual(m.timestamp_part('2018-04-02 00:00:00.123456789'),'2018-04-02 00:00:00.123456789')
  def test_stable_order(self):self.assertLess(m.prediction_name('t',0,9),m.prediction_name('t',0,10))
+
+ def test_evaluation_reads_batch_filenames_with_extension(self):
+  end = '2018-04-12 11:54:11.446358030'
+  interval = '2018-04-12 11:52:09.266362231~' + end
+  for stem in (interval, m.prediction_name(interval, 0, 1408), m.prediction_name(interval, 0, 1409)):
+   with self.subTest(stem=stem):
+    filename = stem + '.csv'
+    self.assertEqual(m.timestamp_part(filename), interval)
+    self.assertEqual(m.timestamp_part(filename.split('~')[1]), end)
