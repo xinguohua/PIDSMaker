@@ -111,7 +111,7 @@ def clean_cfg_for_log(cfg):
     )
 
 
-def main(cfg, project=None, exp=None, sweep_id=None, **kwargs):
+def main(cfg, project=None, exp=None, sweep_id=None, stop_after=None, **kwargs):
     """Main execution function for PIDSMaker pipeline.
 
     Orchestrates pipeline execution across three modes: standard, uncertainty, and tuning.
@@ -175,7 +175,11 @@ def main(cfg, project=None, exp=None, sweep_id=None, **kwargs):
             tuple: (metrics dict from evaluation, times dict with task execution times)
         """
         tasks = get_task_to_module(cfg).keys()
-        task_results = {task: run_task(task, cfg, method, iteration) for task in tasks}
+        task_results = {}
+        for task in tasks:
+            task_results[task] = run_task(task, cfg, method, iteration)
+            if task == stop_after:
+                return {}, {f"time_{k}": round(v["time"], 2) for k,v in task_results.items()}
 
         metrics = task_results["evaluation"]["return"] or {}
         metrics = {

@@ -111,11 +111,12 @@ def run(args):
     try:
         evidence_path = Path(server['input_manifests'][args.dataset])
         evidence = json.loads(evidence_path.read_text())
-        if evidence.get('dataset') != args.dataset or not (evidence.get('integrity_verified') is True or (args.mode == 'smoke' and evidence.get('database_smoke_verified') is True)):
+        db_input = evidence.get('input_kind') == 'existing_postgresql' and evidence.get('database_verified') is True
+        if evidence.get('dataset') != args.dataset or not (db_input or evidence.get('integrity_verified') is True or (args.mode == 'smoke' and evidence.get('database_smoke_verified') is True)):
             raise ValueError('A server-verified input/DB manifest is required')
         if args.mode not in evidence.get('allowed_modes', ['smoke', 'full']):
             raise ValueError('Input evidence is not accepted for this run mode')
-        for key in (('raw_files', 'database_snapshot', 'date_coverage', 'uuid_mapping_sha256', 'boundary_counts') if args.mode == 'full' else ('database_snapshot', 'date_coverage', 'uuid_mapping_sha256', 'boundary_counts')):
+        for key in (('raw_files', 'database_snapshot', 'date_coverage', 'uuid_mapping_sha256', 'boundary_counts') if args.mode == 'full' and not db_input else ('database_snapshot', 'date_coverage', 'uuid_mapping_sha256', 'boundary_counts')):
             if not evidence.get(key):
                 raise ValueError('Missing input evidence: ' + key)
         save(cell/'input_manifest.json', evidence)
@@ -157,7 +158,7 @@ def run(args):
              'input_sha256':digest(evidence_path),'config_sha256':digest(cell/'resolved_config.yml'),
              'protocol':protocol()[args.dataset], 'gt_version':'orthrus',
              'gt_sha256':{f:digest(ROOT/'Ground_Truth/orthrus'/f) for f in cfg.dataset.ground_truth_relative_path},
-             'environment':{'python':sys.version,'platform':platform.platform(),'torch':torch.__version__,
+             'environment':{'pidsmaker_source':__import__('pidsmaker').__file__,'python':sys.version,'platform':platform.platform(),'torch':torch.__version__,
                 'device':server['device'],'gpu':torch.cuda.get_device_name() if torch.cuda.is_available() else None},
              'output':str(cell),'cache_policy':'fresh isolated artifacts; no shared reuse',
              'recovery':'retain failed job; deploy a new run_id after fixing cause','created_at':now()})
@@ -165,6 +166,12 @@ def run(args):
             subprocess.run([sys.executable,'-m','pip','list','--format=json'],stdout=f,check=True)
         save(status, {'state':'running','time':now(),'pid':os.getpid()})
         wandb.init(mode='disabled')
+        if args.stop_after_preparation:
+            if args.mode != 'full':
+                raise ValueError('Preparation boundary requires unchanged full configuration')
+            from native_preparation import prepare_native
+            prepare_native(cfg, cell, out, main)
+            return
         main(cfg, exp=os.environ['RUN_ID'])
         export(cfg, cell)
         save(status, {'state':'pipeline_finished_pending_acceptance','time':now(),
@@ -329,6 +336,7 @@ def cli():
     r=sub.add_parser('run');r.add_argument('--dataset',choices=DATASETS,required=True)
     r.add_argument('--model',choices=MODELS,required=True);r.add_argument('--mode',choices=['smoke','full'],required=True)
     r.add_argument('--server-config',type=Path,required=True)
+    r.add_argument('--stop-after-preparation',action='store_true')
     s=sub.add_parser('status');s.add_argument('directory',type=Path)
     m=sub.add_parser('summarize');m.add_argument('objects',type=Path)
     a=p.parse_args()

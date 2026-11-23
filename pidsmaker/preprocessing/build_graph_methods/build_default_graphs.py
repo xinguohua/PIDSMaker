@@ -419,6 +419,7 @@ def gen_edge_fused_tw(indexid2msg, cfg, cleaner=None, smoke_events=None):
                             node_info = {}
                             edge_list = []
                             # (src_index_id, operation, dst_index_id) of each event
+                            window_input_events = len(temp_list)
                             temp_list = cleaner.dedup_window(
                                 temp_list, key_fn=lambda e: (e[1], e[2], e[4])
                             )
@@ -561,6 +562,12 @@ def gen_edge_fused_tw(indexid2msg, cfg, cleaner=None, smoke_events=None):
 
                             # log(f"Saving graph for {time_interval}")
                             torch.save(graph, graph_name)
+                            ledger = os.environ.get('BASELINE_PREPARATION_LEDGER')
+                            if ledger:
+                                import json
+                                split = next(k for k in ('train','val','test') if date in getattr(cfg.dataset, k+'_dates'))
+                                with open(ledger, 'a') as f:
+                                    f.write(json.dumps({'split':split,'date':date,'window':time_interval,'input_events_after_type_filter':window_input_events,'events_after_dedup':len(temp_list),'nodes':graph.number_of_nodes(),'edges':graph.number_of_edges(),'bytes':os.path.getsize(graph_name),'path':graph_name})+'\n')
 
                             # log(f"[{time_interval}] Num of edges: {len(edge_list)}")
                             # log(f"[{time_interval}] Num of events: {len(temp_list)}")
