@@ -5,6 +5,10 @@ import ast
 import csv
 import hashlib
 import json
+import math
+import numbers
+import shutil
+import tempfile
 import os
 from pathlib import Path
 import platform
@@ -171,7 +175,89 @@ def run(args):
         raise
 
 
+def load_evaluation_checkpoint(model, checkpoint):
+    """Use a freshly reconstructed model; flush before loading saved eval buffers."""
+    import torch
+    model.eval()
+    model.load_state_dict(torch.load(checkpoint, map_location='cpu', weights_only=False))
+    return model
+
+
+def json_value(value, issues, field):
+    """Normalize export values; unavailable metadata is null with an audit reason."""
+    if value is None:
+        issues.append({'field': field, 'reason': 'missing'})
+        return None
+    # NumPy scalar .item() returns the equivalent Python scalar, without coercing arrays.
+    if type(value).__module__.startswith('numpy') and hasattr(value, 'item') and value.ndim == 0:
+        value = value.item()
+    if isinstance(value, float) and not math.isfinite(value):
+        issues.append({'field': field, 'reason': 'non_finite'})
+        return None
+    if isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [json_value(v, issues, f'{field}[{i}]') for i, v in enumerate(value)]
+    if isinstance(value, dict):
+        return {str(k): json_value(v, issues, f'{field}.{k}') for k, v in value.items()}
+    raise TypeError('Unsupported export type at ' + field)
+
+
+def object_record(nid, r, n2u, cfg):
+    issues = []
+    record = json_value({'node_id': nid, 'uuid': n2u.get(int(nid)),
+        'score': r.get('score'), 'prediction': r.get('y_hat'), 'gt': r.get('y_true'),
+        'score_direction': 'higher_is_anomalous', 'threshold': r.get('decision_threshold'),
+        'decision_rule': cfg.evaluation.node_evaluation.threshold_method,
+        'post_clustering': cfg.evaluation.node_evaluation.use_kmeans,
+        'time_range': r.get('time_range'), 'max_loss_window': r.get('tw_with_max_loss')}, issues, 'object')
+    for key in ('node_id', 'prediction', 'gt'):
+        if isinstance(record[key], bool) or not isinstance(record[key], numbers.Integral):
+            raise ValueError('Missing or invalid ' + key)
+        record[key] = int(record[key])
+    if record['prediction'] not in (0, 1) or record['gt'] not in (0, 1):
+        raise ValueError('Non-binary label')
+    if record['score'] is None or isinstance(record['score'], bool) or not isinstance(record['score'], numbers.Real):
+        raise ValueError('Missing or non-finite score')
+    window = record['max_loss_window']
+    if window is not None:
+        if isinstance(window, bool) or not isinstance(window, numbers.Real) or int(window) != window:
+            raise ValueError('Invalid max_loss_window')
+        if window == -1:  # node_evaluation's missing-window sentinel
+            record['max_loss_window'] = None
+            issues.append({'field': 'object.max_loss_window', 'reason': 'missing_sentinel'})
+        elif window < 0:
+            raise ValueError('Invalid negative max_loss_window')
+        else:
+            record['max_loss_window'] = int(window)
+    record['export_issues'] = issues
+    return record
+
+
 def export(cfg, cell):
+    """Publish only a fully serialized export, with a completion marker written last."""
+    names = ('uuid_mapping.json', 'objects.jsonl', 'missing_gt.json', 'metrics.json', 'checkpoint.json')
+    if any((cell / name).exists() for name in (*names, 'export_complete.json')):
+        raise FileExistsError('Export already exists; preserve it and use a new run_id')
+    stage = Path(tempfile.mkdtemp(prefix='.export-', dir=cell))
+    try:
+        _export(cfg, stage)
+        hashes = {name: digest(stage / name) for name in names}
+        for name in names:
+            (stage / name).replace(cell / name)
+        save(cell / 'export_complete.json', {'files': hashes, 'time': now(),
+             'acceptance': 'pending coverage, reconstructed-model predictions and metric checks'})
+    except BaseException as exc:
+        for name in (*names, 'export_complete.json'):
+            (cell / name).unlink(missing_ok=True)
+        save(cell / 'export_failed.json', {'error_type': type(exc).__name__, 'time': now(),
+             'reason': 'export rejected; no complete object export published'})
+        raise
+    finally:
+        shutil.rmtree(stage)
+
+
+def _export(cfg, cell):
     import torch
     from pidsmaker.utils.dataset_utils import get_uuid_to_index_id
     from pidsmaker.utils.labelling import ground_truth_files, read_ground_truth_uuids
@@ -185,12 +271,7 @@ def export(cfg, cell):
     save(cell/'uuid_mapping.json',{str(k):v for k,v in n2u.items()})
     records=[]
     for nid,r in results.items():
-        records.append({'node_id':int(nid),'uuid':n2u.get(int(nid)), 'score':float(r['score']),
-            'prediction':int(r['y_hat']),'gt':int(r['y_true']), 'score_direction':'higher_is_anomalous',
-            'threshold':float(r.get('decision_threshold',0)) if 'decision_threshold' in r else None,
-            'decision_rule':cfg.evaluation.node_evaluation.threshold_method,
-            'post_clustering':cfg.evaluation.node_evaluation.use_kmeans,
-            'time_range':r.get('time_range'),'max_loss_window':r.get('tw_with_max_loss')})
+        records.append(object_record(nid, r, n2u, cfg))
     with (cell/'objects.jsonl').open('w') as f:
         for r in records: f.write(json.dumps(r,allow_nan=False)+'\n')
     ids={r['node_id'] for r in records}

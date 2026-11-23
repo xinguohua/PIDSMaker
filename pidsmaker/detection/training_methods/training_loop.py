@@ -265,6 +265,11 @@ def main(cfg):
             model.load_state_dict(best_model)
             model.to_device(device)
 
+        # Materialize pending TGN messages at the same eval transition that inference
+        # would perform. The saved buffers now represent the validation start state.
+        if fixed_budget and epoch == num_epochs - 1:
+            model.eval()
+
         # Per-epoch checkpoints are only needed by the visualizer's epoch selector.
         # Opt-in via `--save_for_viz`; otherwise skip — the pipeline evaluates from
         # the in-memory best model and never reloads these from disk.
