@@ -1,6 +1,7 @@
 """Recover the completed graph stage after capacity reporting failed; no graph rebuild."""
-import argparse,json,os,shutil
+import argparse,json,os,shutil,sys
 from pathlib import Path
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import yaml
 from yacs.config import CfgNode
 from baseline_matrix import save,now,git
