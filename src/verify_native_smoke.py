@@ -41,12 +41,16 @@ def main():
  set_seed(cfg,seed=0)
  train,val,test,max_nodes=get_preprocessed_graphs(cfg)
  coverage={};epoch=f'model_epoch_{cfg.training.num_epochs-1}'
- reuse=json.loads((cell/'prepared_reuse.json').read_text()) if a.full else None
- if reuse:
+ reuse_path=cell/'prepared_reuse.json'
+ reuse=json.loads(reuse_path.read_text()) if a.full and reuse_path.exists() else None
+ if a.full:
   from baseline_matrix import protocol
-  expected=protocol()[json.loads((cell/'manifest.json').read_text())['dataset']]
+  expected=protocol()[manifest['dataset']]
   for key in ['train_dates','val_dates','test_dates']:
    assert list(getattr(cfg.dataset,key))==expected[key]
+  assert manifest['mode']=='full' and manifest['seed']==0
+  assert digest(cell/'resolved_config.yml')==manifest['config_sha256']
+ if reuse:
   assert reuse['verified']
   for f,h in reuse['shared_files_hashes'].items():assert digest(f)==h, 'Prepared input changed: '+f
   manifest=json.loads((cell/'manifest.json').read_text());assert manifest['input_sha256']==reuse['input_sha256']
