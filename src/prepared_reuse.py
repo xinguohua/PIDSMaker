@@ -31,7 +31,8 @@ def attach_prepared(cfg,source,cell,evidence_path):
     rows=[json.loads(x) for x in (source/'windows.jsonl').read_text().splitlines()]
     bydate={r['date'] for r in rows}
     expected=set(cfg.dataset.train_dates+cfg.dataset.val_dates+cfg.dataset.test_dates)
-    assert bydate==expected, 'Unexpected missing or additional graph dates'
+    # Native construction emits no graph for an empty configured date.
+    assert bydate<=expected, 'Unexpected graph date outside configured splits'
     files={};totals={}
     for r in rows:
         f=Path(r['path']).resolve();assert f.is_relative_to(source)
@@ -55,7 +56,8 @@ def attach_prepared(cfg,source,cell,evidence_path):
     free=shutil.disk_usage(cell).free
     report={'time':now(),'source':str(source),'source_commit':meta['commit'],'input_sha256':meta['input_sha256'],
       'native_source_hashes':checked_source,'graph_hashes':files,'splits':totals,'capacity':estimate,
-      'free_bytes':free,'required_additional_with_reserve':sum(estimate.values()),'links':[]}
+      'free_bytes':free,'required_additional_with_reserve':sum(estimate.values()),
+      'configured_dates_without_graphs':sorted(expected-bydate),'links':[]}
     save(cell/'prepared_reuse.json',report)
     if sum(estimate.values())>free:raise RuntimeError('Measured fused payload plus explicit allowances exceeds free space; see prepared_reuse.json')
     for task,children in [('construction',['nx','indexid2msg']),('transformation',['nx'])]:
