@@ -109,6 +109,64 @@ def start_native(run,spec):
     cmd=[sys.executable,str(Path(spec['code'])/'src/baseline_queue.py'),'worker',str(run/'spec.json')]
     subprocess.run(['tmux','new-session','-d','-s','baseline-'+run.name,'-c',spec['code'],shlex.join(cmd)],check=True)
 
+def reclaim_accepted_caches(path,doc):
+    """Reclaim only derived graph/tensor caches, between matrix workers."""
+    if any(r['active_run_id'] for r in doc['rows']):return
+    root=path.parent.parent.resolve();owners={};candidates={}
+    for row in doc['rows']:
+        cells=[Path(a['path'])/'output'/f"{row['dataset']}-{row['model']}-full" for a in row['attempts']]
+        if row.get('prepared_cell'):cells.append(Path(row['prepared_cell']))
+        for cell in cells:owners.setdefault(cell.resolve(),[]).append(row)
+        if not row['accepted_run_id']:continue
+        accepted=next(a for a in row['attempts'] if a['run_id']==row['accepted_run_id'])
+        evidence=accepted.get('verification',{})
+        if not evidence.get('full_accepted') or not all(evidence.get('checks',{}).get(k) for k in REQUIRED):continue
+        source=evidence.get('source_cell')
+        if not source:continue
+        cell=Path(source)
+        paths=list((cell/'artifacts/construction').glob('*/construction/*/nx'))
+        paths.append(cell/'artifacts/feat_inference')
+        for p in paths:
+            if p.exists():candidates[p.resolve()]=row
+    # Unknown consumers and pending preparation are retained, even when idle.
+    protected=set()
+    for run in root.iterdir():
+        for cell in (run/'output').glob('*-full'):
+            consumers=owners.get(cell.resolve(),[])
+            if consumers and all(r['accepted_run_id'] for r in consumers):continue
+            for p in (cell/'artifacts/construction').glob('*/construction/*/nx'):
+                protected.add(p.resolve())
+            protected.add((cell/'artifacts/feat_inference').resolve())
+            for base,dirs,files in os.walk(cell,followlinks=False):
+                for name in dirs+files:
+                    p=Path(base)/name
+                    if p.is_symlink():protected.add(p.resolve())
+    for p,row in candidates.items():
+        if p in protected or any(p in q.parents or q in p.parents for q in protected):continue
+        if not p.is_relative_to(root) or p.is_symlink():continue
+        # Exact path shapes exclude fitted feature state, mappings and predictions.
+        rel=p.relative_to(root).parts
+        if len(rel)<5 or rel[1]!='output' or rel[3]!='artifacts':continue
+        if rel[4]=='construction':
+            if len(rel)!=9 or rel[6]!='construction' or rel[8]!='nx':continue
+        elif rel[4]!='feat_inference' or len(rel)!=5:continue
+        files=list(p.rglob('*'))
+        if any(f.is_symlink() for f in files):continue
+        files=[f for f in files if f.is_file()]
+        if rel[4]=='feat_inference' and any(f.name!='done.txt' and not f.name.endswith('.TemporalData.simple') for f in files):continue
+        receipt=path.parent/('cache-reclamation-'+str(time.time_ns())+'.json')
+        report={'time':now(),'path':str(p),'accepted_run_id':row['accepted_run_id'],
+                'reason':'Accepted cell; no pending/unknown consumer; rebuild with retained DB, fixed source and config',
+                'before_free':shutil.disk_usage(root).free,
+                'files':[{'path':str(f.relative_to(p)),'bytes':f.stat().st_size,'sha256':digest(f)} for f in files]}
+        save(receipt,report)
+        for base,dirs,names in os.walk(p):os.chmod(base,0o755)
+        shutil.rmtree(p)
+        report.update(deleted=True,after_free=shutil.disk_usage(root).free)
+        report['released_bytes_measured']=report['after_free']-report['before_free'];save(receipt,report)
+        row.setdefault('cache_reclamation_receipts',[]).append(str(receipt))
+        persist(path,doc)
+
 def queue(args):
     path=args.canonical.resolve();path.parent.mkdir(parents=True,exist_ok=True)
     with (path.parent/'writer.lock').open('a') as lock:
@@ -172,6 +230,9 @@ def queue(args):
             # Explicitly configured slots remain occupied through output verification.
             slots=available_devices(doc['rows'],control.get('gpu_devices',[{'physical_index':0}]))
             if not doc['scheduler']['paused'] and slots:
+                if control.get('reclaim_accepted_caches',False):
+                    persist(path,doc)  # Acceptance must be durable before reclamation.
+                    reclaim_accepted_caches(path,doc)
                 free=shutil.disk_usage(path.parent).free
                 server=read(args.server_config)
                 for row in doc['rows']:

@@ -1,7 +1,7 @@
 import json,sys,tempfile,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
-from baseline_queue import initialize,register,accept,REQUIRED,available_devices,worker_environment
+from baseline_queue import initialize,register,accept,REQUIRED,available_devices,worker_environment,reclaim_accepted_caches
 from baseline_matrix import prepare
 class QueueTests(unittest.TestCase):
  def setUp(self):
@@ -46,3 +46,23 @@ class RepairAcceptanceTests(unittest.TestCase):
   row={'accepted_run_id':None,'attempt_ids':['original','derived'],'attempts':[{'run_id':'original','failure':'1024 overwritten scores'},{'run_id':'derived'}]}
   accept(row,row['attempts'][1],{'full_accepted':True,'checks':dict.fromkeys(REQUIRED,True)})
   self.assertEqual(row['attempts'][0]['failure'],'1024 overwritten scores');self.assertEqual(row['accepted_run_id'],'derived')
+
+class CacheReclamationTests(unittest.TestCase):
+ def test_pending_reference_and_active_worker_protect_cache(self):
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d);path=root/'baseline-matrix/matrix.json';doc=initialize(path);row=doc['rows'][0]
+   run=root/'accepted';cell=run/'output/CADETS_E3-velox-full'
+   nx=cell/'artifacts/construction/CADETS_E3/construction/hash/nx';nx.mkdir(parents=True);(nx/'graph.pt').write_bytes(b'graph')
+   feature=cell/'artifacts/feat_inference';feature.mkdir();(feature/'a.TemporalData.simple').write_bytes(b'tensor')
+   retained=[cell/'objects.jsonl',cell/'uuid_mapping.json',cell/'resolved_config.yml',cell/'artifacts/featurization/model.pt',cell/'artifacts/training/model.pt',nx.parent/'indexid2msg/mapping.json']
+   for p in retained:p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(b'keep')
+   register(row,run);accept(row,row['attempts'][0],{'full_accepted':True,'checks':dict.fromkeys(REQUIRED,True),'source_cell':str(cell)})
+   pending=doc['rows'][1];pending_run=root/'pending';register(pending,pending_run)
+   link=pending_run/'output/CADETS_E3-ocrapt-full/artifacts/construction/CADETS_E3/construction/hash/nx';link.parent.mkdir(parents=True);link.symlink_to(nx)
+   reclaim_accepted_caches(path,doc);self.assertTrue(feature.exists())
+   pending['active_run_id']=None;pending['state']='prepared'
+   reclaim_accepted_caches(path,doc);self.assertTrue(nx.exists());self.assertFalse(feature.exists())
+   link.unlink();reclaim_accepted_caches(path,doc);self.assertFalse(nx.exists())
+   self.assertTrue(all(p.read_bytes()==b'keep' for p in retained))
+   self.assertEqual(len(row['cache_reclamation_receipts']),2)
+   for p in row['cache_reclamation_receipts']:self.assertTrue(json.loads(Path(p).read_text())['deleted'])
