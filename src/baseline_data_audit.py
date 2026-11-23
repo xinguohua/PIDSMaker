@@ -4,7 +4,11 @@ from pathlib import Path
 import psycopg2
 from server_credentials import database_options
 from baseline_matrix import protocol,ROOT,save,digest
-p=argparse.ArgumentParser();p.add_argument('--server-config',type=Path,required=True);a=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('--server-config',type=Path,required=True)
+p.add_argument('--dates-only',action='store_true')
+p.add_argument('--statement-timeout-seconds',type=int,default=90)
+a=p.parse_args()
+if not 1 <= a.statement_timeout_seconds <= 600: p.error('statement timeout must be 1..600 seconds')
 server=json.loads(a.server_config.read_text());out=Path(os.environ['RUN_OUTPUT_DIR']);results={}
 def query(c,q,params=None):
  t=time.monotonic()
@@ -18,10 +22,14 @@ for ds,cfg in protocol().items():
  results[ds]=result
  c=psycopg2.connect(dbname=cfg['database'],**database_options(server));c.set_session(readonly=True,autocommit=False)
  def q(name,sql):
-  with c.cursor() as cur:cur.execute("SET LOCAL statement_timeout='90s'; SET LOCAL lock_timeout='3s'; SET LOCAL temp_file_limit='1GB'; SET LOCAL search_path=public,pg_catalog")
+  with c.cursor() as cur:
+   cur.execute("SELECT set_config('statement_timeout',%s,true)",(str(a.statement_timeout_seconds*1000),))
+   cur.execute("SET LOCAL lock_timeout='3s'; SET LOCAL temp_file_limit='1GB'; SET LOCAL search_path=public,pg_catalog")
   result['queries'][name]=query(c,sql);save(out/'summary.json',results);print(ds,name,result['queries'][name]['ok'],flush=True)
  q('identity',"SELECT version(),current_setting('data_directory'),current_database(),current_setting('transaction_read_only')")
  q('date_counts',"SELECT (date '1970-01-01'+((timestamp_rec-14400000000000)/86400000000000)::integer)::text AS eastern_date, count(*),min(timestamp_rec),max(timestamp_rec),count(*) FILTER (WHERE (timestamp_rec-14400000000000)%86400000000000=0) FROM public.event_table GROUP BY 1 ORDER BY 1")
+ if a.dates_only:
+  c.rollback();c.close();continue
  q('nodes',"SELECT 'file',count(*),count(DISTINCT node_uuid),count(DISTINCT index_id) FROM public.file_node_table UNION ALL SELECT 'subject',count(*),count(DISTINCT node_uuid),count(DISTINCT index_id) FROM public.subject_node_table UNION ALL SELECT 'netflow',count(*),count(DISTINCT node_uuid),count(DISTINCT index_id) FROM public.netflow_node_table")
  q('node_global_unique',"SELECT count(*),count(DISTINCT node_uuid),count(DISTINCT index_id) FROM (SELECT node_uuid,index_id FROM public.file_node_table UNION ALL SELECT node_uuid,index_id FROM public.subject_node_table UNION ALL SELECT node_uuid,index_id FROM public.netflow_node_table) n")
  # Match read_ground_truth_uuids: nonempty first column, no header in these files.

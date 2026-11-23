@@ -113,6 +113,8 @@ def run(args):
         evidence = json.loads(evidence_path.read_text())
         if evidence.get('dataset') != args.dataset or evidence.get('integrity_verified') is not True:
             raise ValueError('A server-verified input/DB manifest is required')
+        if args.mode not in evidence.get('allowed_modes', ['smoke', 'full']):
+            raise ValueError('Input evidence is not accepted for this run mode')
         for key in ('raw_files', 'database_snapshot', 'date_coverage', 'uuid_mapping_sha256', 'boundary_counts'):
             if not evidence.get(key):
                 raise ValueError('Missing input evidence: ' + key)
