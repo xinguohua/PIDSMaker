@@ -106,6 +106,7 @@ def queue(args):
         while True:
             control=read(path.parent/'control.json',{})
             doc['scheduler']={'paused':control.get('paused',True),'time':now(),'reason':control.get('reason','Fail closed: explicit resume required')}
+            doc['qualification_runs']=[{'path':p,'status':read(Path(p)/'status.json',{}),'summary':read(Path(p)/'output/summary.json',{})} for p in control.get('qualification_runs',[])]
             for request in control.get('repair_attempts',[]):
                 row=next(r for r in doc['rows'] if r['dataset']==request['dataset'] and r['model']==request['model'])
                 run=Path(request['path'])
