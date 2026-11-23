@@ -3,6 +3,28 @@ import json,os,shutil,threading,time
 from pathlib import Path
 from baseline_matrix import save,now
 
+def dense_tensor_capacity(features, total_edges, node_types, edge_types, ocr_histogram_bins=None):
+    """Size the tensors saved by feat_inference, excluding file and object overhead."""
+    method = features.used_method.strip()
+    if method == 'ocrapt_features':
+        options = features.ocrapt_features
+        # Incoming/outgoing histograms, three idle statistics, and optional time columns.
+        width = (2 * ocr_histogram_bins + 3
+                 + int(options.use_lifespan) + int(options.use_cumulative_active_time))
+    elif method in ('only_type', 'only_ones'):
+        width = 0
+    elif method in ('word2vec', 'hierarchical_hashing'):
+        width = features.emb_dim
+    else:
+        width = None
+    if width is None:
+        return {'feature_dimension': None, 'native_dense_feature_tensor_bytes': None}
+    message_width = 2 * (node_types + width) + edge_types
+    # One float32 message and four int64 fields (src, dst, t, y) per prepared edge.
+    return {'feature_dimension': width, 'native_message_width': message_width,
+            'native_dense_feature_tensor_bytes': total_edges * (4 * message_width + 4 * 8)}
+
+
 def prepare_native(cfg,cell,out,main):
     reserve=4*1024**3
     initial=shutil.disk_usage(cell).free
@@ -31,11 +53,11 @@ def prepare_native(cfg,cell,out,main):
             totals[split]={'windows':len(rr),**{k:sum(r[k] for r in rr) for k in ('input_events_after_type_filter','events_after_dedup','nodes','edges','bytes')}}
         total_edges=sum(r['edges'] for r in rows)
         # Exact native dense tensor dimensions; serialization/CSV/model overhead separate.
-        from pidsmaker.utils.dataset_utils import get_rel2id,get_node_map
+        from pidsmaker.utils.dataset_utils import get_rel2id,get_node_map,get_num_edge_type
         edge_types=max(v for v in get_rel2id(cfg).values() if type(v) is int);node_types=max(v for v in get_node_map().values() if type(v) is int)
-        tensor_bytes=(total_edges*((2*cfg.featurization.emb_dim+2*node_types+edge_types)*4+4*8)
-                      if cfg.featurization.emb_dim is not None and cfg.featurization.used_method in ['word2vec','hierarchical_hashing'] else None)
-        report={'state':'preparation_complete_pending_capacity','time':now(),'cell':str(cell),'splits':totals,'windows_ledger':str(ledger),'feature_dimension':cfg.featurization.emb_dim,'edge_types':edge_types,'node_types':node_types,'native_dense_feature_tensor_bytes':tensor_bytes,'capacity_note':'null tensor bytes means model-specific materialized shape is not yet measured; do not apply Velox formula. Non-null tensor bytes excludes serialization overhead, fitted feature models, full predictions and checkpoints; no smoke extrapolation','free_bytes':shutil.disk_usage(cell).free,'full_training_started':False,'raw_complete':False}
+        bins = get_num_edge_type(cfg) if cfg.featurization.used_method.strip() == 'ocrapt_features' else None
+        capacity = dense_tensor_capacity(cfg.featurization, total_edges, node_types, edge_types, bins)
+        report={'state':'preparation_complete_pending_capacity','time':now(),'cell':str(cell),'splits':totals,'windows_ledger':str(ledger),**capacity,'edge_types':edge_types,'node_types':node_types,'capacity_note':'Tensor payload uses prepared edge counts and the native feature layout. It excludes serialization overhead, fitted feature models, predictions and checkpoints. A null value denotes an unknown layout.','free_bytes':shutil.disk_usage(cell).free,'full_training_started':False,'raw_complete':False}
         save(cell/'status.json',report);save(out/'summary.json',report)
     finally:
         stop.set();os.environ.pop('BASELINE_PREPARATION_LEDGER',None)

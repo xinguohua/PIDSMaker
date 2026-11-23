@@ -26,4 +26,7 @@ for model in ['ocrapt','orthrus','magic','kairos']:
    evidence=json.loads((phase_out/'summary.json').read_text());record['state']='bounded_replay_qualified' if evidence['state']=='reconstruction_replay_verified' else 'verification_failed';record['formal_accepted']=False
   save(out/'summary.json',summary)
  save(out/'summary.json',summary)
-summary['state']='qualification_finished';save(out/'summary.json',summary)
+qualified = all(record['state'] == 'bounded_replay_qualified' for record in summary['models'].values())
+summary['state'] = 'qualification_finished' if qualified else 'qualification_failed'
+save(out/'summary.json', summary)
+sys.exit(0 if qualified else 1)

@@ -178,16 +178,24 @@ class TGNMemory(torch.nn.Module):
 
         return msg, t, src, dst
 
+    @torch.no_grad()
+    def _flush_memory(self, chunk_size: int = 16384):
+        # Messages can reference nodes in another chunk. All chunks must read
+        # the same pre-flush memory and timestamps, including nodes with no messages.
+        next_memory = torch.empty_like(self.memory)
+        next_update = torch.empty_like(self.last_update)
+        for start in range(0, self.num_nodes, chunk_size):
+            end = min(start + chunk_size, self.num_nodes)
+            nodes = torch.arange(start, end, device=self.memory.device)
+            next_memory[start:end], next_update[start:end] = self._get_updated_memory(nodes)
+            self._assoc[start:end] = nodes  # same final mapping as the all-node update
+        self.memory.copy_(next_memory)
+        self.last_update.copy_(next_update)
+
     def train(self, mode: bool = True):
         """Sets the module in training mode."""
         if self.training and not mode:
-            # Flush message store to memory in case we just entered eval mode.
-            # NOTE: this line below was originaly here. However, it is called when calling model.eval()
-            # during inference and generates a memory overflow on large datasets like CADETS_E5.
-            # As we load directly the memory from a pkl file, I don't think we need this line anymore so we
-            # removed it. If results become strange in the future, try to add this line back to ensure it
-            # doen't affect performance.
-            self._update_memory(torch.arange(self.num_nodes, device=self.memory.device))
+            self._flush_memory()
             self._reset_message_store()
         super().train(mode)
 

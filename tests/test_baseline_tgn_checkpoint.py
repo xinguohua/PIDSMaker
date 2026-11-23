@@ -15,6 +15,27 @@ AVAILABLE=all(importlib.util.find_spec(m) is not None for m in ('torch','torch_g
 
 @unittest.skipUnless(AVAILABLE,'requires real torch and torch_geometric in detector environment')
 class TGNCheckpointTests(unittest.TestCase):
+    def test_chunked_flush_matches_simultaneous_update(self):
+        import torch
+        spec = importlib.util.spec_from_file_location('real_tgn', ROOT/'pidsmaker/tgn.py')
+        tgn = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tgn)
+        torch.manual_seed(3)
+        memory = tgn.TGNMemory(7, 2, 4, 2, tgn.IdentityMessage(2, 4, 2),
+                               tgn.LastAggregator(), torch.device('cpu'))
+        # Cross-chunk dependencies in both directions, repeated nodes, and an
+        # untouched last chunk all have to match the original all-node GRU step.
+        with torch.no_grad():
+            memory.memory.normal_()
+            memory.update_state(torch.tensor([0, 3, 1, 4]), torch.tensor([3, 0, 4, 1]),
+                                torch.tensor([1, 2, 3, 4]), torch.randn(4, 2))
+            nodes = torch.arange(memory.num_nodes)
+            expected_memory, expected_update = memory._get_updated_memory(nodes)
+            memory._flush_memory(chunk_size=2)
+        torch.testing.assert_close(memory.memory, expected_memory)
+        torch.testing.assert_close(memory.last_update, expected_update)
+        torch.testing.assert_close(memory._assoc, nodes)
+
     def test_pending_messages_and_continuous_eval_roundtrip(self):
         import torch
         spec=importlib.util.spec_from_file_location('real_tgn',ROOT/'pidsmaker/tgn.py')
