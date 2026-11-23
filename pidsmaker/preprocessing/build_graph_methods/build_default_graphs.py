@@ -58,7 +58,7 @@ def _stream_rows(connect, sql, params=None, fetch_size=50_000):
 
 
 
-def compute_indexid2msg(cfg, cleaner=None):
+def compute_indexid2msg(cfg, cleaner=None, smoke_node_ids=None):
     """Compute mapping from node index IDs to node types and feature labels.
 
     Queries PostgreSQL database for all nodes (netflow, subject/process, file) and
@@ -146,7 +146,7 @@ def compute_indexid2msg(cfg, cleaner=None):
 
     # netflow
     netflow_count = 0
-    for i in _stream_rows(connect, "select * from netflow_node_table;"):
+    for i in _stream_rows(connect, "select * from netflow_node_table" + (" WHERE index_id = ANY(%s)" if smoke_node_ids is not None else ""), (smoke_node_ids,) if smoke_node_ids is not None else None):
         attrs = {
             "type": "netflow",
             "local_ip": str(i[2]),
@@ -167,7 +167,7 @@ def compute_indexid2msg(cfg, cleaner=None):
 
     # subject
     subject_count = 0
-    for i in _stream_rows(connect, "select * from subject_node_table;"):
+    for i in _stream_rows(connect, "select * from subject_node_table" + (" WHERE index_id = ANY(%s)" if smoke_node_ids is not None else ""), (smoke_node_ids,) if smoke_node_ids is not None else None):
         attrs = {"type": "subject", "path": str(i[2]), "cmd_line": str(i[3])}
         index_id = str(i[-1])
         node_type = attrs["type"]
@@ -180,7 +180,7 @@ def compute_indexid2msg(cfg, cleaner=None):
 
     # file
     file_count = 0
-    for i in _stream_rows(connect, "select * from file_node_table;"):
+    for i in _stream_rows(connect, "select * from file_node_table" + (" WHERE index_id = ANY(%s)" if smoke_node_ids is not None else ""), (smoke_node_ids,) if smoke_node_ids is not None else None):
         attrs = {"type": "file", "path": str(i[2])}
         index_id = str(i[-1])
         node_type = attrs["type"]
@@ -253,7 +253,7 @@ def compute_and_save_split2nodes(cfg):
     return split2nodes
 
 
-def gen_edge_fused_tw(indexid2msg, cfg, cleaner=None):
+def gen_edge_fused_tw(indexid2msg, cfg, cleaner=None, smoke_events=None):
     """Generate time-windowed provenance graphs from database events.
 
     Main graph construction function that:
@@ -355,11 +355,12 @@ def gen_edge_fused_tw(indexid2msg, cfg, cleaner=None):
 
             cur = connect.cursor(_next_cursor_name())
             try:
-                cur.execute(sql, sql_params)
+                if smoke_events is None:
+                    cur.execute(sql, sql_params)
                 db_done = False
                 test_mode_stop = False
                 while not db_done and not test_mode_stop:
-                    db_chunk = cur.fetchmany(FETCH_SIZE)
+                    db_chunk = smoke_events[date] if smoke_events is not None else cur.fetchmany(FETCH_SIZE)
                     db_done = len(db_chunk) < FETCH_SIZE
 
                     # Take ownership of leftover, then append newly filtered rows.
@@ -595,9 +596,28 @@ def main(cfg):
     if cleaner:
         log(f"Cleaning methods: {', '.join(sorted(cleaner.methods))}")
 
-    indexid2msg = compute_indexid2msg(cfg=cfg, cleaner=cleaner)
+    smoke_events = None
+    smoke_node_ids = None
+    if cfg._test_mode:
+        # Bound real DB input before feature extraction and graph construction.
+        import json
+        _, conn = init_database_connection(cfg)
+        smoke_events = {}
+        with conn.cursor() as cur:
+            cur.execute("SET statement_timeout='120s'; SET temp_file_limit='256MB'")
+            for date in get_dates_from_cfg(cfg):
+                start = datetime_to_ns_time_US(f"{date} 00:00:00")
+                stop = start + 86400 * 1_000_000_000
+                cur.execute("SELECT * FROM event_table WHERE timestamp_rec > %s AND timestamp_rec < %s ORDER BY timestamp_rec,event_uuid LIMIT 4096", (start, stop))
+                smoke_events[date] = cur.fetchall()
+        conn.close()
+        smoke_node_ids = sorted({n for rows in smoke_events.values() for r in rows for n in (r[1], r[4])})
+        os.makedirs(cfg.construction._task_path, exist_ok=True)
+        with open(os.path.join(cfg.construction._task_path, 'smoke_input.json'), 'w') as f:
+            json.dump({'limit_per_date':4096, 'dates':{d:{'rows':len(rows),'first_timestamp':rows[0][-2] if rows else None,'last_timestamp':rows[-1][-2] if rows else None} for d,rows in smoke_events.items()}, 'node_ids':smoke_node_ids, 'scope':'bounded native smoke; not full split coverage'}, f)
+    indexid2msg = compute_indexid2msg(cfg=cfg, cleaner=cleaner, smoke_node_ids=smoke_node_ids)
 
-    gen_edge_fused_tw(indexid2msg=indexid2msg, cfg=cfg, cleaner=cleaner)
+    gen_edge_fused_tw(indexid2msg=indexid2msg, cfg=cfg, cleaner=cleaner, smoke_events=smoke_events)
 
     split2nodes = compute_and_save_split2nodes(cfg)
     save_indexid2msg(indexid2msg, split2nodes, cfg)
