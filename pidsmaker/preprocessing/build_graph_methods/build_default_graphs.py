@@ -146,7 +146,7 @@ def compute_indexid2msg(cfg, cleaner=None, smoke_node_ids=None):
 
     # netflow
     netflow_count = 0
-    for i in _stream_rows(connect, "select * from netflow_node_table" + (" WHERE index_id = ANY(%s)" if smoke_node_ids is not None else ""), (smoke_node_ids,) if smoke_node_ids is not None else None):
+    for i in _stream_rows(connect, "select * from netflow_node_table" + (" WHERE index_id = ANY(%s)" if smoke_node_ids is not None else ""), ([int(n) for n in smoke_node_ids],) if smoke_node_ids is not None else None):
         attrs = {
             "type": "netflow",
             "local_ip": str(i[2]),
@@ -167,7 +167,7 @@ def compute_indexid2msg(cfg, cleaner=None, smoke_node_ids=None):
 
     # subject
     subject_count = 0
-    for i in _stream_rows(connect, "select * from subject_node_table" + (" WHERE index_id = ANY(%s)" if smoke_node_ids is not None else ""), (smoke_node_ids,) if smoke_node_ids is not None else None):
+    for i in _stream_rows(connect, "select * from subject_node_table" + (" WHERE index_id = ANY(%s)" if smoke_node_ids is not None else ""), ([int(n) for n in smoke_node_ids],) if smoke_node_ids is not None else None):
         attrs = {"type": "subject", "path": str(i[2]), "cmd_line": str(i[3])}
         index_id = str(i[-1])
         node_type = attrs["type"]
@@ -180,7 +180,7 @@ def compute_indexid2msg(cfg, cleaner=None, smoke_node_ids=None):
 
     # file
     file_count = 0
-    for i in _stream_rows(connect, "select * from file_node_table" + (" WHERE index_id = ANY(%s)" if smoke_node_ids is not None else ""), (smoke_node_ids,) if smoke_node_ids is not None else None):
+    for i in _stream_rows(connect, "select * from file_node_table" + (" WHERE index_id = ANY(%s)" if smoke_node_ids is not None else ""), ([int(n) for n in smoke_node_ids],) if smoke_node_ids is not None else None):
         attrs = {"type": "file", "path": str(i[2])}
         index_id = str(i[-1])
         node_type = attrs["type"]
