@@ -34,8 +34,8 @@ def accept(row,attempt,evidence):
 def probe(run):
     run=Path(run);status=read(run/'status.json',{})
     # Existing controller session naming is read from its runner metadata/script.
-    sessions=subprocess.run(['tmux','list-panes','-a','-F','#{pane_current_path}'],capture_output=True,text=True).stdout.splitlines()
-    alive=any(Path(s)==run/'code' for s in sessions)
+    sessions=subprocess.run(['tmux','list-sessions','-F','#{session_name}'],capture_output=True,text=True).stdout.splitlines()
+    alive=any(name in sessions for name in ('baseline-'+run.name,'tdsc-'+run.name,'verify-'+run.name))
     return {'status':status,'tmux_alive':alive,'observed_at':now()}
 
 def persist(path,doc):
@@ -122,6 +122,7 @@ def queue(args):
                 terminal='exit_code' in status
                 if not terminal:
                     if not observed['tmux_alive']:row['state']='active_liveness_unknown'
+                    elif row['state']=='active_liveness_unknown':row['state']='active'
                     continue
                 if attempt.get('kind')=='prediction_repair' and status.get('exit_code')==0:
                     evidence=read(run/'output/summary.json',{})
