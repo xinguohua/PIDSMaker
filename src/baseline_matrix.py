@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 ROOT = Path(__file__).resolve().parents[1]
 DATASETS = ('CADETS_E3', 'THEIA_E3', 'CLEARSCOPE_E3')
 MODELS = ('ocrapt', 'velox', 'orthrus', 'magic', 'kairos')
+EXPORT_FILES = ('uuid_mapping.json', 'objects.jsonl', 'missing_gt.json', 'metrics.json', 'checkpoint.json')
 
 
 def now():
@@ -236,7 +237,7 @@ def object_record(nid, r, n2u, cfg):
 
 def export(cfg, cell):
     """Publish only a fully serialized export, with a completion marker written last."""
-    names = ('uuid_mapping.json', 'objects.jsonl', 'missing_gt.json', 'metrics.json', 'checkpoint.json')
+    names = EXPORT_FILES
     if any((cell / name).exists() for name in (*names, 'export_complete.json')):
         raise FileExistsError('Export already exists; preserve it and use a new run_id')
     stage = Path(tempfile.mkdtemp(prefix='.export-', dir=cell))
@@ -287,6 +288,39 @@ def _export(cfg, cell):
     # Full CSV losses, graph mappings, and preprocessing remain under artifacts/.
 
 
+def summarize(objects):
+    """Reject interrupted or altered publications before computing any metrics."""
+    objects = Path(objects)
+    cell = objects.parent
+    if objects.name != 'objects.jsonl':
+        raise ValueError('Summarize requires the published objects.jsonl')
+    if (cell / 'export_failed.json').exists():
+        raise ValueError('Failed export is not usable')
+    status = cell / 'status.json'
+    if status.exists() and json.loads(status.read_text()).get('state') == 'failed':
+        raise ValueError('Failed cell is not usable')
+    marker = cell / 'export_complete.json'
+    if not marker.is_file():
+        raise ValueError('Missing export completion marker')
+    hashes = json.loads(marker.read_text()).get('files')
+    if not isinstance(hashes, dict) or set(hashes) != set(EXPORT_FILES):
+        raise ValueError('Completion marker must cover every expected export file')
+    object_bytes = None
+    for name in EXPORT_FILES:
+        path = cell / name
+        if path.is_symlink() or not path.is_file():
+            raise ValueError('Missing or indirect export file: ' + name)
+        if name == 'objects.jsonl':
+            object_bytes = path.read_bytes()
+            actual = hashlib.sha256(object_bytes).hexdigest()
+        else:
+            actual = digest(path)
+        if hashes[name] != actual:
+            raise ValueError('Export hash mismatch: ' + name)
+    # Parse the exact bytes verified above, not a second potentially changed read.
+    return metrics(json.loads(line) for line in object_bytes.splitlines())
+
+
 def cli():
     p=argparse.ArgumentParser(description=__doc__); sub=p.add_subparsers(dest='action',required=True)
     prep=sub.add_parser('prepare');prep.add_argument('--output',type=Path,required=True)
@@ -301,6 +335,6 @@ def cli():
     elif a.action=='status':
         print(json.dumps([{'file':str(f),**json.loads(f.read_text())} for f in sorted(a.directory.rglob('status.json'))],indent=2))
     else:
-        print(json.dumps(metrics(json.loads(line) for line in a.objects.open()),indent=2))
+        print(json.dumps(summarize(a.objects),indent=2))
 
 if __name__=='__main__': cli()
