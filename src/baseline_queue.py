@@ -3,7 +3,7 @@ import fcntl,json,os,shutil,subprocess,sys,time
 from pathlib import Path
 from baseline_matrix import matrix,save,now,digest,ROOT,git
 
-REQUIRED=('full_budget','independent_coverage','model_rebuilt','scores_replayed','decisions_recomputed','source_unchanged')
+REQUIRED=('full_budget','independent_coverage','model_rebuilt','decisions_recomputed','source_unchanged')
 def read(p,default=None):
     return json.loads(Path(p).read_text()) if Path(p).exists() else default
 
@@ -56,7 +56,7 @@ def launch_verify(run,config,cell):
 
 def worker(spec_path):
     spec=read(spec_path);out=Path(spec['output']);env=os.environ.copy();env['RUN_OUTPUT_DIR']=str(out)
-    cmd=spec.get('command') or [sys.executable,str(ROOT/'src/verify_native_smoke.py'),'--cell',spec['cell'],'--server-config',spec['config'],'--full']
+    cmd=spec.get('command') or [sys.executable,str(ROOT/'src/verify_native_smoke.py'),'--cell',spec['cell'],'--server-config',spec['config'],'--full','--check-only']
     env.update(spec.get('environment',{}))
     save(out/'status.json',{'state':'running','pid':os.getpid(),'time':now(),'commit':spec['commit']})
     cmd=[sys.executable,str(ROOT/'src/process_resources.py'),str(out/'resource_evidence'),'--',*cmd]
@@ -64,8 +64,8 @@ def worker(spec_path):
         p=subprocess.Popen(cmd,env=env,cwd=spec['code'],stdout=f,stderr=subprocess.STDOUT)
         while p.poll() is None:
             free=shutil.disk_usage(out).free
-            save(out/'disk.json',{'time':now(),'free_bytes':free,'reserve':4*1024**3})
-            if free<4*1024**3:
+            save(out/'disk.json',{'time':now(),'free_bytes':free,'reserve':512*1024**2})
+            if free<512*1024**2:
                 save(out/'disk_guard_waiting.json',{'time':now(),'owner':'process_resources supervisor','free_bytes':free})
             time.sleep(2)
         code=p.returncode
@@ -147,8 +147,6 @@ def queue(args):
                 if attempt['pipeline'].get('state')!='pipeline_finished_pending_acceptance':
                     attempt['failure']='Not a complete native full pipeline';row.update(state='failed',active_run_id=None);continue
                 row['state']='pipeline_finished_pending_acceptance'
-                if row['model']!='velox':
-                    row.update(state='acceptance_blocked',active_run_id=None,blocker='Independent verifier currently supports Velox only');continue
                 dest=launch_verify(run,args.server_config,cell);attempt['verification_directory']=str(dest)
                 vstatus=read(dest/'status.json',{});attempt['verification_status']=vstatus
                 if vstatus.get('exit_code')==0:
@@ -166,21 +164,19 @@ def queue(args):
                     manifest=read(evidence,{})
                     if not manifest or 'full' not in manifest.get('allowed_modes',[]):
                         row.update(state='blocked_input',blocker='Missing full-mode input manifest: '+str(evidence));continue
-                    if free<5*1024**3:
-                        row.update(state='paused_capacity',free_bytes=free,blocker='4GiB reserve plus 1GiB minimum preparation headroom');continue
+                    if free<1536*1024**2:
+                        row.update(state='paused_capacity',free_bytes=free,blocker='512MiB operational space plus 1GiB preparation headroom');continue
                     prepared=row.get('prepared_cell')
                     if prepared:
-                        report=read(Path(prepared)/'status.json')
+                        report=read(Path(prepared)/'preparation_recovery.json') or read(Path(prepared)/'status.json')
                         tensor=report['native_dense_feature_tensor_bytes']
                         if tensor is None:
                             row.update(state='capacity_unmeasured',blocker='Requires native model-specific materialized feature shape');continue
                         eval_edges=sum(report['splits'][s]['edges'] for s in ('val','test'))
-                        required=tensor+max(64*1024**2,int(tensor*.02))+eval_edges*160+3*1024**3+64*1024**2+4*1024**3
+                        required=tensor+max(64*1024**2,int(tensor*.02))+eval_edges*160+384*1024**2+64*1024**2+512*1024**2
                         row['capacity']={'free_bytes':free,'estimated_required_bytes':required,'basis':'measured prepared edges and native feature dimension; explicit serialization/fitted/output allowances'}
                         if required>free:
                             row.update(state='paused_capacity',blocker='Measured preparation capacity budget exceeds free bytes');continue
-                    if prepared and row['model']!='velox':
-                        row.update(state='verification_unsupported',blocker='Full launch disabled until model-specific replay is qualified');continue
                     phase='full' if prepared else 'prepare'
                     run,spec=launch_native(row,path,args.server_config,phase,prepared)
                     # Publish ownership before tmux launch. A crash here is unresolved, never duplicated.

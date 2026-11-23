@@ -26,7 +26,7 @@ def dense_tensor_capacity(features, total_edges, node_types, edge_types, ocr_his
 
 
 def prepare_native(cfg,cell,out,main):
-    reserve=4*1024**3
+    reserve=512*1024**2
     initial=shutil.disk_usage(cell).free
     if initial < reserve+1024**3: raise RuntimeError('Insufficient preparation reserve')
     ledger=cell/'windows.jsonl'

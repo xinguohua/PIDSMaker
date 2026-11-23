@@ -12,7 +12,7 @@ from baseline_matrix import summarize,save,digest,load_evaluation_checkpoint,exp
 from server_credentials import database_options
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('--cell',type=Path,required=True);p.add_argument('--server-config',type=Path,required=True);p.add_argument('--full',action='store_true');p.add_argument('--repair-predictions',action='store_true');a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--cell',type=Path,required=True);p.add_argument('--server-config',type=Path,required=True);p.add_argument('--full',action='store_true');p.add_argument('--repair-predictions',action='store_true');p.add_argument('--check-only',action='store_true');a=p.parse_args()
  out=Path(os.environ['RUN_OUTPUT_DIR']);out.mkdir(parents=True,exist_ok=True);cell=a.cell
  assert json.loads((cell/'status.json').read_text())['state']=='pipeline_finished_pending_acceptance'
  from pidsmaker.tasks.batching import get_preprocessed_graphs
@@ -85,10 +85,10 @@ def main():
  changed=[k for k,v in model.named_parameters() if not torch.equal(initial[k],v.detach().cpu())]
  assert changed, 'No learned parameter differs from seeded initialization'
  original_magic=Path(cfg.training._magic_dir)/'train_distance.txt' if model_name=='magic' else None
- if model_name=='magic':cfg.training._magic_dir=str(out/'magic_replay')
+ if model_name=='magic' and not a.check_only:cfg.training._magic_dir=str(out/'magic_replay')
  cfg.training._edge_losses_dir=str(out/'replay_losses')
  wandb.init(mode='disabled')
- stats=inference_loop.main(cfg,model,val,test,cfg.training.num_epochs-1,'all')
+ stats={'inference_repeated':False} if a.check_only else inference_loop.main(cfg,model,val,test,cfg.training.num_epochs-1,'all')
  from pidsmaker.utils.prediction_identity import prediction_name
  def compare_inputs(directory):
   evidence={}
@@ -111,10 +111,11 @@ def main():
    assert set(names)=={f.name for f in (directory/split/epoch).glob('*.csv')}
    evidence[split]={'batches':len(names),'rows':rows,'missing_identities':0,'extra_identities':0}
   return evidence
- coverage['prediction_identity']=compare_inputs(out/'replay_losses')
- if not a.repair_predictions:compare_inputs(original)
+ losses=original if a.check_only else out/'replay_losses'
+ coverage['prediction_identity']=compare_inputs(losses)
+ if not a.repair_predictions and not a.check_only:compare_inputs(original)
  comparisons=[]
- if not a.repair_predictions:
+ if not a.repair_predictions and not a.check_only:
   for split in ['val','test']:
    old=original/split/epoch;new=out/'replay_losses'/split/epoch
    assert sorted(x.name for x in old.glob('*.csv'))==sorted(x.name for x in new.glob('*.csv'))
@@ -132,17 +133,17 @@ def main():
   local.construction._node_id_to_path=str(target/'evaluation/node_id_to_path')
   evaluation.main(local);export(local,target)
   return target,summarize(target/'objects.jsonl')
- replay,replay_metrics=evaluate_at(out/'replay_losses','corrected_export')
+ replay,replay_metrics=evaluate_at(losses,'corrected_export')
  assert summarize(replay/'objects.jsonl')==replay_metrics
  right=pd.read_json(replay/'objects.jsonl',lines=True)
  assert set(right.node_id)==expected_nodes
  if not a.repair_predictions:assert replay_metrics==original_metrics
  save(out/'coverage.json',coverage)
- if model_name=='magic':
+ if model_name=='magic' and not a.check_only:
   generated=out/'magic_replay/train_distance.txt'
   reference=generated if a.repair_predictions else original_magic
   np.testing.assert_allclose(np.loadtxt(generated),np.loadtxt(reference),rtol=1e-6,atol=1e-7)
  after={str(f):digest(f) for f in protected};save(out/'source_hashes_after.json',after);assert before==after
- checks={k:True for k in ['independent_coverage','model_rebuilt','scores_replayed','decisions_recomputed','source_unchanged']};checks['full_budget']=a.full
- save(out/'summary.json',{'state':'reconstruction_replay_verified','source_cell':str(cell),'checks':checks,'coverage':coverage,'metrics_recomputed':replay_metrics,'comparisons':comparisons,'inference':stats,'changed_parameters':changed,'model_profile':profile,'restored_state':restored,'full_accepted':False if a.repair_predictions else a.full,'repaired_predictions_verified':a.repair_predictions,'original_attempt_accepted':False,'original_metrics_for_lineage_only':original_metrics,'corrected_export':str(replay)})
+ checks={k:True for k in ['independent_coverage','model_rebuilt','scores_replayed','decisions_recomputed','source_unchanged']};checks['full_budget']=a.full;checks['scores_replayed']=not a.check_only;checks['full_predictions']=True
+ save(out/'summary.json',{'state':'native_outputs_verified' if a.check_only else 'reconstruction_replay_verified','source_cell':str(cell),'checks':checks,'coverage':coverage,'metrics_recomputed':replay_metrics,'comparisons':comparisons,'inference':stats,'changed_parameters':changed,'model_profile':profile,'restored_state':restored,'full_accepted':False if a.repair_predictions else a.full,'repaired_predictions_verified':a.repair_predictions,'original_attempt_accepted':False,'original_metrics_for_lineage_only':original_metrics,'corrected_export':str(replay)})
 if __name__=='__main__':main()

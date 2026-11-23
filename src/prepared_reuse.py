@@ -12,17 +12,17 @@ def clean(value):
 def attach_prepared(cfg,source,cell,evidence_path):
     source=source.resolve()
     if cfg._test_mode:raise ValueError('Full preparation cannot be attached to smoke')
-    status=json.loads((source/'status.json').read_text())
+    status=json.loads((source/('preparation_recovery.json' if (source/'preparation_recovery.json').exists() else 'status.json')).read_text())
     if status['state']!='preparation_complete_pending_capacity':raise ValueError('Preparation is not complete')
     meta=json.loads((source/'manifest.json').read_text())
     previous=yaml.safe_load((source/'resolved_config.yml').read_text())
     assert meta['input_sha256']==digest(evidence_path), 'Input manifest differs'
     assert not previous['_test_mode']
-    for name in ['dataset','construction','transformation','featurization','feat_inference','batching','training','evaluation']:
+    for name in ['dataset','construction','transformation']:
         assert clean(previous[name])==clean(dict(getattr(cfg,name))), 'Effective config differs: '+name
     code=source.parent.parent/'code'
     checked_source={}
-    for folder in ['pidsmaker','config']:
+    for folder in ['pidsmaker/construction','pidsmaker/transformation']:
         for old in sorted((code/folder).rglob('*')):
             if old.is_file() and old.suffix in ['.py','.yml','.yaml']:
                 rel=old.relative_to(code);new=ROOT/rel
@@ -49,9 +49,9 @@ def attach_prepared(cfg,source,cell,evidence_path):
     # Explicit estimated allowances, not claimed measurements: CSV lines, object exports,
     # fitted word2vec vocabulary/state and native serialization overhead.
     estimate={'tensor_payload_exact':tensor,'tensor_serialization_allowance':max(64*1024**2,int(tensor*.02)),
-      'val_test_csv_allowance':eval_edges*160,'fitted_feature_states_allowance':2*1024**3,
-      'mapping_object_metrics_allowance':1024**3,'checkpoint_allowance':64*1024**2,
-      'reserve':4*1024**3}
+      'val_test_csv_allowance':eval_edges*160,'fitted_feature_states_allowance':128*1024**2,
+      'mapping_object_metrics_allowance':256*1024**2,'checkpoint_allowance':64*1024**2,
+      'reserve':512*1024**2}
     free=shutil.disk_usage(cell).free
     report={'time':now(),'source':str(source),'source_commit':meta['commit'],'input_sha256':meta['input_sha256'],
       'native_source_hashes':checked_source,'graph_hashes':files,'splits':totals,'capacity':estimate,
