@@ -110,14 +110,13 @@ def start_native(run,spec):
     subprocess.run(['tmux','new-session','-d','-s','baseline-'+run.name,'-c',spec['code'],shlex.join(cmd)],check=True)
 
 def reclaim_accepted_caches(path,doc):
-    """Reclaim only derived graph/tensor caches, between matrix workers."""
-    if any(r['active_run_id'] for r in doc['rows']):return
+    """Reclaim accepted derived caches, protecting pending and active consumers."""
     root=path.parent.parent.resolve();owners={};candidates={}
     for row in doc['rows']:
         cells=[Path(a['path'])/'output'/f"{row['dataset']}-{row['model']}-full" for a in row['attempts']]
         if row.get('prepared_cell'):cells.append(Path(row['prepared_cell']))
         for cell in cells:owners.setdefault(cell.resolve(),[]).append(row)
-        if not row['accepted_run_id']:continue
+        if row['active_run_id'] or not row['accepted_run_id']:continue
         accepted=next(a for a in row['attempts'] if a['run_id']==row['accepted_run_id'])
         evidence=accepted.get('verification',{})
         if not evidence.get('full_accepted') or not all(evidence.get('checks',{}).get(k) for k in REQUIRED):continue

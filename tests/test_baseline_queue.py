@@ -59,7 +59,7 @@ class CacheReclamationTests(unittest.TestCase):
    register(row,run);accept(row,row['attempts'][0],{'full_accepted':True,'checks':dict.fromkeys(REQUIRED,True),'source_cell':str(cell)})
    pending=doc['rows'][1];pending_run=root/'pending';register(pending,pending_run)
    link=pending_run/'output/CADETS_E3-ocrapt-full/artifacts/construction/CADETS_E3/construction/hash/nx';link.parent.mkdir(parents=True);link.symlink_to(nx)
-   reclaim_accepted_caches(path,doc);self.assertTrue(feature.exists())
+   reclaim_accepted_caches(path,doc);self.assertFalse(feature.exists());self.assertTrue(nx.exists())
    pending['active_run_id']=None;pending['state']='prepared'
    reclaim_accepted_caches(path,doc);self.assertTrue(nx.exists());self.assertFalse(feature.exists())
    link.unlink();reclaim_accepted_caches(path,doc);self.assertFalse(nx.exists())
