@@ -150,6 +150,9 @@ def run(args):
         parsed.database_port = db['port']
         parsed.database_password = os.environ[db['password_env']]
         cfg = get_yml_cfg(parsed)
+        if args.prepared_cell:
+            from prepared_reuse import attach_prepared
+            attach_prepared(cfg, args.prepared_cell, cell, evidence_path)
         resolved = cfg.clone()
         resolved.database.password = '<environment>'
         (cell/'resolved_config.yml').write_text(resolved.dump())
@@ -337,6 +340,7 @@ def cli():
     r.add_argument('--model',choices=MODELS,required=True);r.add_argument('--mode',choices=['smoke','full'],required=True)
     r.add_argument('--server-config',type=Path,required=True)
     r.add_argument('--stop-after-preparation',action='store_true')
+    r.add_argument('--prepared-cell',type=Path)
     s=sub.add_parser('status');s.add_argument('directory',type=Path)
     m=sub.add_parser('summarize');m.add_argument('objects',type=Path)
     a=p.parse_args()
