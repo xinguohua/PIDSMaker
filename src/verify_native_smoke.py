@@ -22,7 +22,10 @@ train,val,test,max_nodes=get_preprocessed_graphs(cfg)
 set_seed(cfg,seed=0)
 model=build_model(data_sample=train[0][0],device=get_device(cfg),cfg=cfg,max_node_num=max_nodes,all_data=(val,test))
 checkpoint=json.loads((cell/'checkpoint.json').read_text())['path']
+initial={k:v.detach().cpu().clone() for k,v in model.named_parameters()}
 load_evaluation_checkpoint(model,checkpoint)
+changed=[k for k,v in model.named_parameters() if not torch.equal(initial[k],v.detach().cpu())]
+assert changed, 'No learned parameter differs from seeded initialization'
 original=Path(cfg.training._edge_losses_dir)
 cfg.training._edge_losses_dir=str(out/'replay_losses')
 wandb.init(mode='disabled')
@@ -36,4 +39,4 @@ for split in ['val','test']:
   pd.testing.assert_frame_equal(left,right,check_exact=False,rtol=1e-6,atol=1e-7)
   comparisons.append({'split':split,'file':f.name,'rows':len(left),'max_loss_error':float(np.max(np.abs(left.loss-right.loss)))})
 assert comparisons
-save(out/'summary.json',{'state':'reconstruction_replay_verified','source_cell':str(cell),'metrics_recomputed':metrics,'comparisons':comparisons,'inference':stats,'full_accepted':False})
+save(out/'summary.json',{'state':'reconstruction_replay_verified','source_cell':str(cell),'metrics_recomputed':metrics,'comparisons':comparisons,'inference':stats,'changed_parameters':changed,'full_accepted':False})
