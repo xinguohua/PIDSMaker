@@ -8,6 +8,7 @@
 [![DOI](https://img.shields.io/badge/DOI-10.5281/zenodo.19813646-ed6a2f?style=flat&labelColor=gray)](https://doi.org/10.5281/zenodo.19813646)
 [![License](https://img.shields.io/github/license/ubc-provenance/PIDSMaker?style=flat&color=ed6a2f&labelColor=gray)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/ubc-provenance/PIDSMaker?style=flat&color=ed6a2f&labelColor=gray)](https://github.com/ubc-provenance/PIDSMaker/releases)
+[![Discord](https://img.shields.io/badge/Discord-Join-ed6a2f?style=flat&labelColor=gray&logo=discord&logoColor=white)](https://discord.gg/jecmkTABUg)
 [![Stars](https://img.shields.io/github/stars/ubc-provenance/PIDSMaker?style=flat&color=ed6a2f&labelColor=white&logo=github&logoColor=black)](https://github.com/ubc-provenance/PIDSMaker/stargazers)
 
 </div>
@@ -16,9 +17,9 @@
   <strong>
     <a href="https://www.usenix.org/conference/usenixsecurity25/presentation/bilot">📄 Experiments Paper</a>
     &nbsp;|&nbsp;
-	<a href="https://www.arxiv.org/abs/2601.22983">📄 Framework Paper</a>
+	<a href="https://dl.acm.org/doi/10.1145/3770855.3817514">📄 Framework Paper</a>
     &nbsp;|&nbsp;
-    <a href="https://tristanbilot.github.io/public_content/slides_pidsmaker.pdf">🎙️ NDSS PRISM'26 Slides</a>
+    <a href="https://tristanbilot.github.io/public_content/slides_pidsmaker.pdf">🎙️ NDSS PRISM'26 Tutorial</a>
 	  &nbsp;|&nbsp;
     <a href="https://ubc-provenance.github.io/PIDSMaker/">📘 Documentation</a>
     &nbsp;|&nbsp;
@@ -280,6 +281,21 @@ If you use this work, please cite the two following papers:
 ## Contributing
 
 Pull requests are welcome! Please follow the [contribution guidelines](https://ubc-provenance.github.io/PIDSMaker/contributing/).
+
+Questions, ideas or feature requests? Join our [Discord](https://discord.gg/jecmkTABUg).
+
+## Support and Funding
+
+<p align="center">
+  <a href="https://www.amazon.science/research-awards/recipients/thomas-pasquier" target="_blank"><img
+    src="https://upload.wikimedia.org/wikipedia/commons/9/93/Amazon_Web_Services_Logo.svg"
+    alt="Thomas Pasquier's Amazon Research Award"
+    width="20%" align="middle"></a>
+  <a href="https://www.cs.ubc.ca/news/2026/01/thomas-amazon-cyberthreats" target="_blank"><img
+    src="https://upload.wikimedia.org/wikipedia/en/3/3c/Natural_Sciences_and_Engineering_Research_Council_Logo.svg"
+    alt="UBC article on the NSERC Alliance grant with Amazon"
+    width="20%" align="middle"></a>
+</p>
 
 ## License
 
