@@ -39,8 +39,11 @@ def plot(source, out):
     plt.rcParams.update({'font.size':9,'axes.spines.top':False,'axes.spines.right':False,
                          'pdf.fonttype':42,'font.family':'DejaVu Sans'})
     data=[r for r in read(source/'FIG1_ROWS.csv') if r['order']=='forward']
-    types=list(dict.fromkeys(r['type_a'] for r in data))
-    assert types and set(types)=={r['type_b'] for r in data}
+    ranked=sorted(read(source/'FIG1_RANKS.csv'),key=lambda r:int(r['rank']))
+    types=[r['unit_type'] for r in ranked]
+    assert [int(r['rank']) for r in ranked]==list(range(1,len(types)+1))
+    assert ranked==sorted(ranked,key=lambda r:(-int(r['training_frequency']),r['unit_type']))
+    assert types and set(types)=={r['type_a'] for r in data}=={r['type_b'] for r in data}
     index={v:i for i,v in enumerate(types)}
     matrices=np.zeros((5,len(types),len(types)),dtype=np.int64)
     recorded=set()
@@ -65,9 +68,6 @@ def plot(source, out):
     fig.text(.055,.17,'Axes show the same types in training-frequency order. A diagonal cell requires two distinct units of that type.',fontsize=10)
     fig.text(.055,.105,'Grey = no observed co-occurrence in that partition. A composition contributes once per displayed type pair.',fontsize=9,color='#414951')
     save(fig,out,'Figure_1_Behavioral_Composition_Distribution')
-    with (out/'Figure_1_rank_key.csv').open('w',newline='') as f:
-        writer=csv.writer(f);writer.writerow(['rank','unit_type'])
-        writer.writerows(enumerate(types,1))
     freq=[r for r in read(source/'FIG2_ROWS.csv') if r['order']=='forward']
     if not freq:
         raise ValueError('No multi-unit compositions in plot source')
