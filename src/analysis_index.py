@@ -145,7 +145,7 @@ def publish_node_predictions(events, target, export):
                 )
             return
         digest = hashlib.sha256()
-        with closing(sqlite3.connect(staged)) as db:
+        with closing(sqlite3.connect(staged.resolve().as_uri(), uri=True)) as db:
             db.execute(
                 "create table pred(id integer primary key, uuid text not null, gt integer, prediction integer, score real, win integer)"
             )
