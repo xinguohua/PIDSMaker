@@ -6,7 +6,7 @@ from pathlib import Path
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm
+from matplotlib.colors import ListedColormap, LogNorm
 import numpy as np
 
 
@@ -56,7 +56,7 @@ def plot(source, out):
     cmap=plt.get_cmap('viridis').copy()
     cmap.set_bad('#eceeed')
     norm=LogNorm(vmin=1,vmax=max(2,int(matrices.max())))
-    fig,axes=panels('Training compositions containing pairs of frequent execution-unit types')
+    fig,axes=panels('Pairs of frequent activity types in Velox training on CADETS E3')
     labels=[str(i+1) for i in range(len(types))]
     for k,(ax,m) in enumerate(zip(axes,matrices),1):
         im=ax.imshow(np.ma.masked_equal(m,0),cmap=cmap,norm=norm,interpolation='nearest')
@@ -83,8 +83,9 @@ def plot(source, out):
                              [int(r['composition_frequency']) for r in rr],bins=(xb,yb),weights=weights)
         assert int(h.sum())==sum(weights)
         densities.append(h)
-    fig,axes=panels('Frequency of a complete composition and of its least frequent constituent')
-    cm=plt.get_cmap('magma_r').copy();cm.set_bad('white')
+    fig,axes=panels('Complete compositions and their least frequent activities in Velox training on CADETS E3')
+    cm=ListedColormap(plt.get_cmap('Blues')(np.linspace(.4,1,256)))
+    cm.set_bad('white')
     norm=LogNorm(vmin=1,vmax=max(2,max(int(h.max()) for h in densities)))
     for k,(ax,h) in enumerate(zip(axes,densities),1):
         im=ax.pcolormesh(xb,yb,np.ma.masked_equal(h.T,0),cmap=cm,norm=norm,shading='flat',rasterized=True)
