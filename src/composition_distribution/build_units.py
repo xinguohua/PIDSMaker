@@ -3,12 +3,13 @@ import argparse
 import ast
 import json
 import time
+import os
 from pathlib import Path
 import duckdb
 
 def build(out, code):
     staged=json.loads((out/'stage/source.json').read_text())
-    db=duckdb.connect(str(out/'raw.building.duckdb'))
+    db=duckdb.connect(str(out/f'raw.building.{os.getpid()}.duckdb'))
     db.execute("SET threads=8; SET memory_limit='42GB'; SET preserve_insertion_order=false")
     def run(sql):db.execute(sql)
     def table(name,query):
@@ -33,9 +34,9 @@ def build(out, code):
     table('segments',"""select (row_number() over(order by host,block)-1)::integer segment,* from (
         select distinct host,block from physical_events union select distinct host,training_block from declarations where training_block is not null)""")
     table('source_meta',"""select host,uuid,first(kind order by did) kind,
-       first(role order by (training_block is null),did) role,
-       first(pid order by (training_block is null),did) pid,
-       first(cmd order by (training_block is null),did) cmd,
+       first(role order by did) filter(where training_block is not null) as role,
+       first(pid order by did) filter(where training_block is not null) as pid,
+       first(cmd order by did) filter(where training_block is not null and cmd is not null) as cmd,
        count(distinct kind) kinds
        from declarations group by host,uuid""")
     assert count('select count(*) from source_meta where kinds!=1')==0
@@ -49,7 +50,7 @@ def build(out, code):
        ) s where uuid is not null group by host,block,uuid""")
     table('nodes',"""select (row_number() over(order by s.host,s.uuid)-1)::integer nid,s.host,s.uuid,
        coalesce(m.kind,case when (s.basis&1)<>0 then 'Subject' else 'UnresolvedObject' end) kind,
-       coalesce(m.role,case when (s.basis&1)<>0 then 'SUBJECT_UNDECLARED' else 'UNKNOWN_OBJECT' end) role,
+       coalesce(m.role,m.kind || ':unknown_role',case when (s.basis&1)<>0 then 'SUBJECT_UNDECLARED' else 'UNKNOWN_OBJECT' end) as role,
        m.pid,m.cmd from (select host,uuid,bit_or(basis) basis from scope_refs group by host,uuid) s
        left join source_meta m on m.host=s.host and m.uuid=s.uuid""")
     table('node_scopes',"""select n.nid,g.segment,r.basis from scope_refs r join nodes n using(host,uuid)
@@ -70,15 +71,15 @@ def build(out, code):
         nullif(regexp_extract(trim(path1), '[^/]+$'),'') target, retval
         from raw_events), look as (
         select *,first_value(reported ignore nulls) over(partition by segment,actor order by ts,seq nulls last,eid
-          rows between 1 following and unbounded following) following from raw),
+          rows between 1 following and unbounded following) AS following_name from raw),
         evidence as (
         select *,op='EVENT_EXECUTE' and (try_cast(retval as bigint)=0 or
-         (target is not null and reported is not null and following=target and following<>reported)) as switch
+         (target is not null and reported is not null and following_name=target and following_name<>reported)) as switched
          from look),
-        names as (select *,case when switch then coalesce(target,following) else reported end program_hint from evidence),
+        names as (select *,case when switched then coalesce(target,following_name) else reported end program_hint from evidence),
         prior as (select *,last_value(program_hint ignore nulls) over(partition by segment,actor order by ts,seq nulls last,eid
-          rows between unbounded preceding and 1 preceding) previous_program from names)
-        select eid,actor,segment,ts,seq,program_hint,case when switch then 'witnessed_execute'
+          rows between unbounded preceding and 1 preceding) AS previous_program from names)
+        select eid,actor,segment,ts,seq,program_hint,case when switched then 'witnessed_execute'
             when previous_program is not null and program_hint is not null and program_hint<>previous_program then 'observed_image_change' end boundary
         from prior""")
     table('observations',"""select segment,actor,eid,ts,seq,0::tinyint slot,program_hint,boundary from actor_states
@@ -93,14 +94,14 @@ def build(out, code):
         first(eid order by ts,seq nulls last,eid) filter(where boundary is not null) boundary_eid,
         first(boundary order by ts,seq nulls last,eid) filter(where boundary is not null) image_boundary
         from image_observations group by segment,actor,image""")
-    table('subject_starts',"""select n.nid,g.segment,min(d.start_ns) filter(where d.start_ns>0) declared_start
+    table('subject_starts',"""select n.nid,g.segment,min(d.start_ns) filter(where d.start_ns>0) declared_start,first(d.cmd order by d.did) filter(where d.cmd is not null) as declared_cmd
         from declarations d join nodes n using(host,uuid) join segments g on g.host=d.host and g.block=d.training_block
         where d.kind='Subject' group by n.nid,g.segment""")
     table('units',"""with all_groups as (select * from unit_groups union all
         select s.segment,n.nid::bigint,0,null,null,null,null,null from node_scopes s join nodes n using(nid)
         where n.kind='Subject' and not exists(select 1 from unit_groups u where u.segment=s.segment and u.actor=n.nid)),
         enriched as (select a.*,n.nid subject,n.pid,
-          coalesce(a.image_program,nullif(regexp_extract(trim(n.cmd), '^([^ ]*/)?([^ /]+)',2),''),'UNKNOWN_PROGRAM') as program,
+          coalesce(a.image_program,nullif(regexp_extract(trim(st.declared_cmd), '^([^ ]*/)?([^ /]+)',2),''),'UNKNOWN_PROGRAM') as program,
           st.declared_start,
           case when a.image=min(a.image) over(partition by a.segment,a.actor) then least(a.observed_first,st.declared_start) else a.observed_first end start_ns
           from all_groups a left join nodes n on a.actor=n.nid left join subject_starts st on st.nid=n.nid and st.segment=a.segment)
@@ -126,7 +127,7 @@ def build(out, code):
          (select *,lag(uid) over(partition by segment,actor order by image) previous_uid from units) u
          join events e on e.eid=u.boundary_eid where previous_uid is not null""")
     # End times above describe an observation bound; only the following view confirms actual exits.
-    view('unit_lifetimes',"""select u.*,x.exit_ns,case when x.exit_ns is not null then 'observed_exit' when
+    view('unit_lifetimes',"""select u.*,x.exit_ns,case when x.exit_ns is not null and x.exit_ns<u.observed_last then 'exit_then_later_record_uncertain' when x.exit_ns is not null then 'observed_exit' when
        lead(u.uid) over(partition by u.segment,u.actor order by u.image) is not null then 'next_image_observed'
        else 'right_censored' end end_status from units u left join
        (select owner,max(ts) exit_ns from events where op='EVENT_EXIT' group by owner) x on x.owner=u.uid""")
@@ -159,7 +160,7 @@ def build(out, code):
         'unknown_kind_nodes':count("select count(*) from nodes where kind='UnresolvedObject'")}
     for rel in ['scope_refs','source_meta','raw_events','observations','image_observations','unit_groups','actor_states','event_units','subject_starts']:
         run('drop table '+rel)
-    run('checkpoint');db.close();(out/'raw.building.duckdb').rename(out/'raw.duckdb')
+    run('checkpoint');db.close();(out/f'raw.building.{os.getpid()}.duckdb').rename(out/'raw.duckdb')
     (out/'raw_summary.json').write_text(json.dumps(stats,indent=2))
     print(json.dumps(stats),flush=True)
 
