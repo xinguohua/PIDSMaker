@@ -53,6 +53,9 @@ rel2id_darpa_tc = {
     "EVENT_CLONE": 10,
 }
 
+rel2id_cadets_e3 = {**rel2id_darpa_tc, 11: "EVENT_FORK", "EVENT_FORK": 11}
+
+
 possible_events = {
     ("subject", "subject"): [
         "EVENT_READ",
@@ -521,6 +524,18 @@ def decrement_dict(d):
     }
 
 
+def uses_fork_vocabulary(cfg):
+    # Frozen ten-type runs retain their original tensor dimensions and labels.
+    return cfg.dataset.name == "CADETS_E3" and cfg.dataset.num_edge_types == 11
+
+
+def with_fork_event(events, cfg):
+    if not uses_fork_vocabulary(cfg):
+        return events
+    key = ("subject", "subject")
+    return {**events, key: [*events[key], "EVENT_FORK"]}
+
+
 def get_rel2id(cfg, from_zero=False):
     dataset_name = cfg.dataset.name.lower()
 
@@ -533,7 +548,8 @@ def get_rel2id(cfg, from_zero=False):
     elif dataset_name in ATLASv2_DATASETS:
         return rel2id_atlasv2
     elif cfg.dataset.name in DARPA_TC_DATASETS:
-        return decrement_dict(rel2id_darpa_tc) if from_zero else rel2id_darpa_tc
+        relations = rel2id_cadets_e3 if uses_fork_vocabulary(cfg) else rel2id_darpa_tc
+        return decrement_dict(relations) if from_zero else relations
     elif dataset_name in graph_processor_carbon_black_edr_datasets:
         return decrement_dict(rel2id_graph_processor_carbon_black_edr) if from_zero else rel2id_graph_processor_carbon_black_edr
     else:
@@ -558,15 +574,18 @@ def get_num_edge_type(cfg):
     return cfg.dataset.num_edge_types
 
 
+def ordered_event_triplets(cfg):
+    triplets = [(src, dst, event) for (src, dst), events in get_possible_events(cfg).items()
+                for event in events]
+    # Append the new class after all existing triplet IDs.
+    if uses_fork_vocabulary(cfg):
+        triplets.sort(key=lambda item: item[2] == "EVENT_FORK")
+    return triplets
+
+
 def get_rel2id_considering_triplets(cfg):
     if "edge_type_triplet" in cfg.batching.edge_features:
-        possible_events = get_possible_events(cfg)
-        return {
-            i + 1: e
-            for i, e in enumerate(
-                [event for events in possible_events.values() for event in events]
-            )
-        }
+        return {i: event for i, (_, _, event) in enumerate(ordered_event_triplets(cfg), start=1)}
     return get_rel2id(cfg)
 
 
@@ -576,7 +595,7 @@ def get_possible_events(cfg):
     if dataset_name in graph_processor_carbon_black_edr_datasets:
         return possible_events_graph_processor_carbon_black_edr
     else:
-        return possible_events_darpa_tc
+        return with_fork_event(possible_events_darpa_tc, cfg)
 
 def uses_darpa_tc_schema(dataset):
     # OPTC and the Carbon Black EDR datasets (atlasv2_edr,

@@ -30,7 +30,7 @@ from pidsmaker.utils.dataset_utils import (
     get_node_map,
     get_num_edge_type,
     get_rel2id,
-    get_possible_events,
+    ordered_event_triplets,
 )
 from pidsmaker.utils.utils import get_multi_datasets, log_dataset_stats, log_tqdm
 from pidsmaker.hetero import compute_hetero_features
@@ -343,12 +343,10 @@ def extract_msg_from_data(
 def get_possible_triplets(cfg):
     entity_map = get_node_map(from_zero=True)
     event_map = get_rel2id(cfg, from_zero=True)
-    possible_events = get_possible_events(cfg)
 
     possible_triplets = [
         [entity_map[src_type], entity_map[dst_type], event_map[event]]
-        for (src_type, dst_type), events in possible_events.items()
-        for event in events
+        for src_type, dst_type, event in ordered_event_triplets(cfg)
     ]
     return torch.tensor(possible_triplets, dtype=torch.long)
 

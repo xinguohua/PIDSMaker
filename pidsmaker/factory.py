@@ -23,6 +23,7 @@ from pidsmaker.utils.dataset_utils import (
     get_num_edge_type,
     get_rel2id,
     possible_events,
+    with_fork_event,
     OPTC_DATASETS,
 )
 from pidsmaker.hetero import get_metadata
@@ -163,7 +164,7 @@ def encoder_block_factory(cfg, msg_dim, in_dim, edge_dim, device, max_node_num):
                 )
 
             node_map = get_node_map(from_zero=True)
-            metadata = get_metadata(possible_events, node_map)
+            metadata = get_metadata(with_fork_event(possible_events, cfg), node_map)
 
             encoder = HeteroGraphTransformer(
                 in_dim=in_dim,
@@ -316,7 +317,7 @@ def inner_encoder_factory(cfg, in_dim, encoder, original_edge_dim, node_map, edg
         encoder = EventLinearEncoder(
             in_dim=original_edge_dim,
             out_dim=in_dim,
-            possible_events=possible_events,
+            possible_events=with_fork_event(possible_events, cfg),
             node_map=node_map,
             edge_map=edge_map,
             encoder=encoder,
@@ -331,6 +332,7 @@ def inner_encoder_factory(cfg, in_dim, encoder, original_edge_dim, node_map, edg
             encoder=encoder,
             num_nodes=max_node_num,
             device=device,
+            fork_index=edge_map.get("EVENT_FORK"),
         )
         
     return encoder

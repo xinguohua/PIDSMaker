@@ -5,7 +5,7 @@ from pidsmaker.utils.dataset_utils import rel2id_darpa_tc
 
 
 class AncestorEncoder(nn.Module):
-    def __init__(self, in_dim, out_dim, edge_dim, encoder, num_nodes, device):
+    def __init__(self, in_dim, out_dim, edge_dim, encoder, num_nodes, device, fork_index=None):
         super().__init__()
         self.rnn = nn.LSTM(in_dim + edge_dim, out_dim, batch_first=True)
         self.hidden_states = {}  # {process_id: (h, c)}
@@ -13,9 +13,10 @@ class AncestorEncoder(nn.Module):
         self.edge_dim = edge_dim
 
         considered_events = ["EVENT_EXECUTE", "EVENT_CLONE"]
-        self.considered_events = torch.tensor(
-            [rel2id_darpa_tc[event] - 1 for event in considered_events], device=device
-        )
+        indices = [rel2id_darpa_tc[event] - 1 for event in considered_events]
+        if fork_index is not None:
+            indices.append(fork_index)
+        self.considered_events = torch.tensor(indices, device=device)
 
         self.encoder = encoder
         self.linear = nn.Linear(out_dim + in_dim, out_dim)

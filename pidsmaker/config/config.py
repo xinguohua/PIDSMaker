@@ -96,7 +96,7 @@ DATASET_DEFAULT_CONFIG = {
         "database": "cadets_e3",
         "database_all_file": "cadets_e3",
         "num_node_types": 3,
-        "num_edge_types": 10,
+        "num_edge_types": 11,
         "timezone": "US/Eastern",
         "start_date": "2018-04-02",
         "end_date": "2018-04-14",
