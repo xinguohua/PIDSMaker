@@ -106,12 +106,12 @@ def verify_training_population(root):
             manifest['within_window_node_occurrences'],manifest['distinct_node_ids'])
         assert scalar(conn,'select count(*) from w')==581 and scalar(conn,'select count(*) from b')==3665
         bad_windows=scalar(conn,'''select count(*) from w full join
-            (select window_id,count(*) n,count(distinct batch_id) b from e group by window_id) g using(window_id)
-            full join (select window_id,count(*) nnode from n group by window_id) ns using(window_id)
+            (select window_id,count(*) AS n,count(distinct batch_id) AS b from e group by window_id) g using(window_id)
+            full join (select window_id,count(*) AS nnode from n group by window_id) ns using(window_id)
             where w.edges is distinct from g.n or w.batches is distinct from g.b
                or w.nodes is distinct from ns.nnode''')
         bad_batches=scalar(conn,'''select count(*) from b full join (
-            select batch_id,window_id,min(tensor_row) lo,max(tensor_row) hi,count(*) n from e group by all
+            select batch_id,window_id,min(tensor_row) AS lo,max(tensor_row) AS hi,count(*) AS n from e group by all
             ) g using(batch_id,window_id) where b.edges is distinct from g.n
             or b.first_tensor_row is distinct from g.lo or b.last_tensor_row is distinct from g.hi''')
         if bad_windows or bad_batches:
@@ -126,10 +126,10 @@ def native_units(root):
     db.execute(f"create or replace view native_edges as select * from read_parquet({lit(root/'NATIVE_EDGES/*.parquet')})")
     db.execute(f"create or replace view native_nodes as select * from read_parquet({lit(root/'NATIVE_NODES/*.parquet')})")
     db.execute("""create or replace table nodes as select
-        (row_number() over(order by window_id,nid)-1)::bigint nid, nid native_nid, window_id, kind,
+        (row_number() over(order by window_id,nid)-1)::bigint AS nid, nid AS native_nid, window_id, kind,
         kind AS role,label,uuid from native_nodes""")
     db.execute("""create or replace temp table endpoints as select
-        e.eid,e.op,e.ts,e.window_id,s.nid s,d.nid d,s.kind='subject' sp,d.kind='subject' dp
+        e.eid,e.op,e.ts,e.window_id,s.nid AS s,d.nid AS d,s.kind= 'subject' AS sp,d.kind= 'subject' AS dp
         from native_edges e join nodes s on e.window_id=s.window_id and e.src=s.native_nid
         join nodes d on e.window_id=d.window_id and e.dst=d.native_nid""")
     # pidsmaker.utils.dataset_utils.edge_reversed changes the information-flow
@@ -138,56 +138,56 @@ def native_units(root):
         case when sp and not dp then true when dp and not sp then false
              when sp and dp then op not in ('EVENT_EXECUTE','EVENT_LSEEK','EVENT_MMAP',
              'EVENT_OPEN','EVENT_ACCEPT','EVENT_READ','EVENT_RECVFROM','EVENT_RECVMSG',
-             'EVENT_READ_SOCKET_PARAMS','EVENT_CHECK_FILE_ATTRIBUTES','READ') end actor_at_src
+             'EVENT_READ_SOCKET_PARAMS','EVENT_CHECK_FILE_ATTRIBUTES','READ') end AS actor_at_src
         from endpoints""")
-    db.execute("""create or replace temp table activity as select nid,min(ts) t0,max(ts) t1 from
-        (select s nid,ts from actors where sp union all select d,ts from actors where dp) group by nid""")
+    db.execute("""create or replace temp table activity as select nid,min(ts) AS t0,max(ts) AS t1 from
+        (select s AS nid,ts from actors where sp union all select d,ts from actors where dp) group by nid""")
     # Actual labels use "type path cmd_line". Preserve the original label and
     # take only the executable token of the path, or of cmd_line when path is absent.
     db.execute("""create or replace table units as
       with subject_nodes as (
-        select n.*,regexp_extract(label,'^subject +([^ ]+)',1) path_token,
-        regexp_extract(label,'^subject +[^ ]+ +([^ ]+)',1) cmd_token
+        select n.*,regexp_extract(label,'^subject +([^ ]+)',1) AS path_token,
+        regexp_extract(label,'^subject +[^ ]+ +([^ ]+)',1) AS cmd_token
         from nodes n where kind='subject'
       ), identified as (
-        select n.nid subject,
+        select n.nid AS subject,
         case when lower(path_token) not in ('','none','na','null','0') then path_token
-             when lower(cmd_token) not in ('','none','na','null','0') then cmd_token end exec_token,
-        a.t0 start_ns,a.t1 end_ns,window_id segment,null::bigint fallback_eid,native_nid,
-        label native_label from subject_nodes n left join activity a using(nid)
+             when lower(cmd_token) not in ('','none','na','null','0') then cmd_token end AS exec_token,
+        a.t0 AS start_ns,a.t1 AS end_ns,window_id AS segment,null::bigint AS fallback_eid,native_nid,
+        label AS native_label from subject_nodes n left join activity a using(nid)
       ), incl_unresolved as (
         select * from identified union all select null,null,ts,ts,window_id,eid,null,null
         from actors where not sp and not dp)
-      select (row_number() over(order by start_ns asc nulls last, segment,subject nulls last,fallback_eid)-1)::bigint uid,
-        subject,coalesce(nullif(regexp_extract(exec_token,'([^/]+)$',1),''),'UNKNOWN_PROGRAM') program,
+      select (row_number() over(order by start_ns asc nulls last, segment,subject nulls last,fallback_eid)-1)::bigint AS uid,
+        subject,coalesce(nullif(regexp_extract(exec_token,'([^/]+)$',1),''),'UNKNOWN_PROGRAM') AS program,
         start_ns,end_ns,segment,fallback_eid,native_nid,native_label,
         case when subject is null then 'unresolved_edge_actor'
              when start_ns is null then 'isolated_native_subject'
-             else 'observed_window_subject' end start_status from incl_unresolved""")
+             else 'observed_window_subject' end AS start_status from incl_unresolved""")
     db.execute("""create or replace table event_binding as
-        select a.eid,coalesce(u.uid,f.uid) owner,u.subject,
-        case when a.actor_at_src then d else s end object1,
-        case when a.actor_at_src is null then d end object2,
-        peer.uid object1_uid,null::bigint object2_uid,
+        select a.eid,coalesce(u.uid,f.uid) AS owner,u.subject,
+        case when a.actor_at_src then d else s end AS object1,
+        case when a.actor_at_src is null then d end AS object2,
+        peer.uid AS object1_uid,null::bigint AS object2_uid,
         case when a.actor_at_src then 'actor_to_object' when not a.actor_at_src then 'object_to_actor'
-             else 'native_src_to_dst_actor_unknown' end direction
+             else 'native_src_to_dst_actor_unknown' end AS direction
         from actors a left join units u on u.subject=case when a.actor_at_src then s
             when not a.actor_at_src then d end
         left join units f on f.fallback_eid=a.eid
         left join units peer on peer.subject=case when a.actor_at_src then d else s end""")
     db.execute("""create or replace view events as select e.*,b.* exclude(eid)
                   from native_edges e join event_binding b using(eid)""")
-    db.execute("""create or replace table proc_edges as select eid,owner src_uid,object1_uid dst_uid,ts,op
+    db.execute("""create or replace table proc_edges as select eid,owner AS src_uid,object1_uid AS dst_uid,ts,op
         from events where op in ('EVENT_FORK','EVENT_CLONE','EVENT_VFORK','EVENT_CREATE_THREAD')
         and subject is not null and object1_uid is not null""")
     db.execute("""create or replace table resource_events as
-        select e.eid,e.owner uid,n.nid resource,n.window_id segment
+        select e.eid,e.owner AS uid,n.nid AS resource,n.window_id AS segment
         from event_binding e join nodes n on e.object1=n.nid where n.kind<>'subject'
         union select e.eid,e.owner,n.nid,n.window_id
         from event_binding e join nodes n on e.object2=n.nid where n.kind<>'subject'""")
     db.execute("""create or replace table incidence as select distinct uid,resource,segment from resource_events""")
     db.execute("""create or replace view exec_observations as select e.eid,e.owner,e.window_id,e.ts,
-        e.object1,n.native_nid target_native_node,n.kind target_kind,n.label target_label
+        e.object1,n.native_nid AS target_native_node,n.kind AS target_kind,n.label AS target_label
         from events e left join nodes n on e.object1=n.nid where e.op='EVENT_EXECUTE'""")
     nedges=scalar(db,'select count(*) from native_edges')
     nnodes=scalar(db,'select count(*) from native_nodes')
@@ -203,7 +203,7 @@ def native_units(root):
         'native_node_map':'select nid,window_id,native_nid from nodes',
         'native_event_index':'select * exclude(src,dst) from native_edges',
         'unreferenced_nodes':'''select n.nid from nodes n anti join
-          (select s nid from endpoints union select d from endpoints) used using(nid)''',
+          (select s AS nid from endpoints union select d from endpoints) used using(nid)''',
         'execute_observations':'select * from exec_observations',
     }.items():
         copy(db,query,root/'RELATION_INDEX'/(fname+'.parquet'))
@@ -244,14 +244,14 @@ def audit(db,root):
                       ('p_edges',rel/'process_relations.parquet'),('mapping',rel/'native_node_map.parquet'),
                       ('isolated_nodes',rel/'unreferenced_nodes.parquet'),('event_index',rel/'native_event_index.parquet')]:
         db.execute(f'create temp table {name} as select * from read_parquet({lit(path)})')
-    db.execute("""create temp table restored as select e.*,s.native_nid src,d.native_nid dst,
-      s.window_id src_window,d.window_id dst_window,b.owner,b.subject,b.object1,b.object2
+    db.execute("""create temp table restored as select e.*,s.native_nid AS src,d.native_nid AS dst,
+      s.window_id AS src_window,d.window_id AS dst_window,b.owner,b.subject,b.object1,b.object2
       from event_index e join owner_index b using(eid) join mapping s on s.nid=case
       when b.direction='actor_to_object' then b.subject else b.object1 end
       join mapping d on d.nid=case b.direction when 'actor_to_object' then b.object1
       when 'object_to_actor' then b.subject else b.object2 end""")
     db.execute("""create temp table restored_nodes as select nid from isolated_nodes union all select
-       distinct nid from (select subject nid from restored union all select object1 from restored
+       distinct nid from (select subject AS nid from restored union all select object1 from restored
        union all select object2 from restored) where nid is not null""")
     count=scalar(db,'select count(*) from native_edges')
     nodes=scalar(db,'select count(*) from native_nodes')
@@ -262,16 +262,16 @@ def audit(db,root):
        where a.eid is null or b.eid is null or
        {differences}
        or b.src_window<>b.window_id or b.dst_window<>b.window_id""")
-    db.execute("""create temp table node_key as select m.window_id,m.native_nid nid
+    db.execute("""create temp table node_key as select m.window_id,m.native_nid AS nid
        from restored_nodes r join mapping m using(nid)""")
-    node_multiset=scalar(db,"""select count(*) from (select *,count(*) n from node_key group by all)
-      a full join (select window_id,nid,count(*) n from native_nodes group by all) b using(window_id,nid)
+    node_multiset=scalar(db,"""select count(*) from (select *,count(*) AS n from node_key group by all)
+      a full join (select window_id,nid,count(*) AS n from native_nodes group by all) b using(window_id,nid)
       where a.n is distinct from b.n""")
     dups=scalar(db,'select count(*)-count(distinct eid) from restored')
     if reduced!=count or bad or dups or node_multiset:
         raise ValueError(dict(native_events=count,recovered=reduced,mismatch=bad,duplicates=dups,node_delta=node_multiset))
     isolated=scalar(db,"""select count(*) from units anti join (
-      select src_uid uid from p_edges where src_uid<>dst_uid union
+      select src_uid AS uid from p_edges where src_uid<>dst_uid union
       select dst_uid from p_edges where src_uid<>dst_uid union
       select uid from r_inc join (select segment,resource from r_inc group by all having count(*)>1)
       using(segment,resource)) adjacent using(uid)""")
@@ -283,7 +283,7 @@ def audit(db,root):
         for hop in range(1,6):
             name=f'{order}_{hop}'
             path=root/'COMPOSITION_ASSIGNMENTS'/f'{name}.csv'
-            db.execute(f"""create or replace temp table a as select unit_id uid,composition_id cid,depth
+            db.execute(f"""create or replace temp table a as select unit_id AS uid,composition_id AS cid,depth
                from read_csv({lit(path)}, header=true,columns={{'unit_id':'BIGINT','composition_id':'BIGINT','depth':'INTEGER'}})""")
             missing=scalar(db,'select count(*) from units anti join a using(uid)')
             extra=scalar(db,'select count(*) from a anti join units using(uid)')
@@ -296,20 +296,20 @@ def audit(db,root):
             if any((missing,extra,dup_units,invalid,count-unique_recovered,count-total_recovered)):
                 raise ValueError((name,missing,extra,dup_units,invalid,unique_recovered,total_recovered))
             db.execute("""create or replace temp table rc as select r.segment,r.resource,a.cid,
-               count(*)::bigint units from r_inc r join a using(uid) group by all""")
+               count(*)::bigint AS units from r_inc r join a using(uid) group by all""")
             db.execute("""create or replace temp table res_totals as select segment,resource,
-               sum(units)::bigint n,count(*) refs,sum(units*(units-1)//2)::bigint inside from rc group by all""")
+               sum(units)::bigint AS n,count(*) AS refs,sum(units*(units-1)//2)::bigint AS inside from rc group by all""")
             edge_dir=root/'BOUNDARY_RELATIONS'/name
             copy(db,'select rc.* from rc join res_totals t using(segment,resource) where t.refs>1',edge_dir/'shared_resource_groups.parquet')
-            copy(db,"""select p.*,x.cid src_composition,y.cid dst_composition from p_edges p
+            copy(db,"""select p.*,x.cid AS src_composition,y.cid AS dst_composition from p_edges p
                join a x on p.src_uid=x.uid join a y on p.dst_uid=y.uid where x.cid<>y.cid""",edge_dir/'process_edges.parquet')
-            copy(db,"""select e.eid,x.cid owner_composition,y.cid object1_composition from owner_index e
+            copy(db,"""select e.eid,x.cid AS owner_composition,y.cid AS object1_composition from owner_index e
                join a x on e.owner=x.uid join a y on e.object1_uid=y.uid where x.cid<>y.cid""",edge_dir/'target_subjects.parquet')
             cross_e=scalar(db,f"""select count(*) from (
                select r.eid from r_events r join res_totals t using(segment,resource) where t.refs>1
                union select eid from read_parquet({lit(edge_dir/'target_subjects.parquet')}))""")
             cross_p=scalar(db,f"select count(*) from read_parquet({lit(edge_dir/'process_edges.parquet')})")
-            groups,singles,maxsize=db.execute('select count(*),count(*) filter(where n=1),max(n) from (select cid,count(*) n from a group by cid)').fetchone()
+            groups,singles,maxsize=db.execute('select count(*),count(*) filter(where n=1),max(n) from (select cid,count(*) AS n from a group by cid)').fetchone()
             within,across,shared,refs=db.execute("""select coalesce(sum(inside),0),coalesce(sum(n*(n-1)//2-inside),0),
                count(*) filter(where refs>1),coalesce(sum(refs) filter(where refs>1),0) from res_totals""").fetchone()
             audits.append(dict(order=order,hops=hop,original_nodes=nodes,recovered_unique_nodes=nodes,
