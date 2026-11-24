@@ -139,7 +139,7 @@ def prepare(con,root):
     create(con,'steps',"""SELECT DISTINCT r.uid, r.resource AS obj, e.ts, e.ord
                         FROM raw.resource_events r JOIN actor e USING(eid)""")
     create(con,'process',"""SELECT p.eid,p.src_uid src,p.dst_uid dst,p.op,
-                    e.uid owner,e.ord,e.a,e.b
+                    e.uid AS owner,e.ord,e.a,e.b
                     FROM raw.proc_edges p JOIN actor e USING(eid)""")
     exists=con.execute("select count(*) from duckdb_tables() where database_name=current_database() and table_name='ut'").fetchone()[0]
     if exists: return
@@ -351,7 +351,7 @@ def report(con,root,placements,known,units):
             inv=inventory[shape]; n=sum(inv.values());cid,nres,nproc=reps[shape]
             m=min(freq[t] for t in inv); maxfreq=max(freq[t] for t in inv)
             assert all(k*v<=freq[t] for t,v in inv.items()), (order,hop,shape)
-            counts.append((order,hop,shape,k,n,len(inv),m,maxfreq,cid,nres,nproc))
+            counts.append((order,hop,shape,k,n,len(inv),m,maxfreq,cid,nres,nproc,sum(units[u][1] is None for u in members[cid])))
             component.extend((order,hop,shape,t,programs[t],v,freq[t],k) for t,v in sorted(inv.items()))
             if n>1:cells[m,k]+=1;num_multi+=1
         for (m,k),count in sorted(cells.items()):f2.append((order,hop,m,k,count,count*k))
@@ -364,7 +364,7 @@ def report(con,root,placements,known,units):
                 if 2<=len(us)<=5:
                     m=min(freq[units[u][2]] for u in us)
                     examples.append((hop,shape,cid,us,k,m,nres,nproc))
-    write_records(root/'COMPOSITION_COUNTS.csv',['order','hop','composition_type','composition_frequency','units','distinct_unit_types','min_component_frequency','max_component_frequency','representative_composition_id','shared_resources_within','internal_process_relations'],counts)
+    write_records(root/'COMPOSITION_COUNTS.csv',['order','hop','composition_type','composition_frequency','units','distinct_unit_types','min_component_frequency','max_component_frequency','representative_composition_id','shared_resources_within','internal_process_relations','unresolved_actor_units'],counts)
     write_records(root/'COMPONENT_COMPOSITION_FREQUENCIES.csv',['order','hop','composition_type','unit_type','program','multiplicity','unit_frequency','composition_frequency'],component)
     write_records(root/'COMPOSITION_SIZE_DISTRIBUTION.csv',['order','hop','units_per_composition','composition_instances'],sizes)
     write_records(root/'COMPOSITION_TYPE_INSTANCES.csv',['order','hop','composition_id','member_key','composition_type','units','shared_resources_within','internal_process_relations'],instance_rows)
@@ -383,6 +383,8 @@ def example_details(con,root,examples,units):
         return dict(record,source_file=manifest[shard],source_line=line)
     n_events=dict(con.execute('select uid,count(*) from actor group by uid').fetchall())
     freq=Counter(t[2] for t in units.values())
+    resolved=[r for r in examples if all(units[u][1] is not None and units[u][0] not in (None,'','UNKNOWN_PROGRAM') for u in r[3])]
+    examples=resolved or examples
     choices=[r for r in examples if sum(n_events.get(u,0) for u in r[3])<=150]
     if not choices:choices=sorted(examples,key=lambda r:sum(n_events.get(u,0) for u in r[3]))[:100]
     candidates=sorted(choices,key=lambda r:(-r[5],r[4],r[0],r[2]))+sorted(choices,key=lambda r:(-r[4],r[0],r[2]))
@@ -392,6 +394,25 @@ def example_details(con,root,examples,units):
         for item in items:
             if item[1] not in types and tuple(sorted(item[3])) not in sets:
                 sets.add(tuple(sorted(item[3])));types.add(item[1]);selected.append(item);break
+    # Find two distinct real executions of one known program with the same type,
+    # and one real execution of that program with a different type.
+    by_program=defaultdict(lambda:defaultdict(list))
+    for u,(program,subject,tag) in units.items():
+        if subject is not None and 0<n_events.get(u,0)<=20 and program not in ('UNKNOWN_PROGRAM',''):
+            by_program[program][tag].append(u)
+    options=[(sum(map(len,group.values())),name) for name,group in by_program.items()
+             if len(group)>1 and max(map(len,group.values()))>1]
+    samples=[]
+    if options:
+        program=max(options)[1];groups=by_program[program]
+        typ=min((t for t in groups if len(groups[t])>=2),key=lambda t:(-len(groups[t]),t))
+        alt=min((t for t in groups if t!=typ),key=lambda t:(-len(groups[t]),t))
+        for u in sorted(groups[typ])[:2]+[min(groups[alt])]:
+            cur=con.execute('select eid,uuid,ts,op,direction,object1,object2 from raw.events where owner=? order by ts,eid',[u])
+            keys=[c[0] for c in cur.description]
+            samples.append(dict(uid=u,unit_type=units[u][2],program=program,frequency=freq[units[u][2]],
+                subject=units[u][1], events=[locate(dict(zip(keys,row))) for row in cur.fetchall()]))
+    (root/'UNIT_TYPE_EXAMPLES.json').write_text(json.dumps(samples,indent=2))
     with (root/'COMPOSITION_EXAMPLES.jsonl').open('w') as f:
         for hop,ident,cid,us,k,m,nres,nproc in selected:
             ps=','.join(map(str,us))
