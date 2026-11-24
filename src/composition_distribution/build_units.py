@@ -68,19 +68,19 @@ def build(out, code):
     table('actor_states',"""with raw as (
         select eid,subject,segment,ts,seq,op,coalesce(subject::bigint,-eid-1) actor,
         nullif(regexp_extract(trim(exec_name), '[^/]+$'),'') reported,
-        nullif(regexp_extract(trim(path1), '[^/]+$'),'') target, retval
+        nullif(regexp_extract(trim(path1), '[^/]+$'),'') AS target_name, retval
         from raw_events), look as (
         select *,first_value(reported ignore nulls) over(partition by segment,actor order by ts,seq nulls last,eid
           rows between 1 following and unbounded following) AS following_name from raw),
         evidence as (
         select *,op='EVENT_EXECUTE' and (try_cast(retval as bigint)=0 or
-         (target is not null and reported is not null and following_name=target and following_name<>reported)) as switched
+         (target_name is not null and reported is not null and following_name=target_name and following_name<>reported)) as switched
          from look),
-        names as (select *,case when switched then coalesce(target,following_name) else reported end program_hint from evidence),
+        names as (select *,case when switched then coalesce(target_name,following_name) else reported end program_hint from evidence),
         prior as (select *,last_value(program_hint ignore nulls) over(partition by segment,actor order by ts,seq nulls last,eid
           rows between unbounded preceding and 1 preceding) AS previous_program from names)
         select eid,actor,segment,ts,seq,program_hint,case when switched then 'witnessed_execute'
-            when previous_program is not null and program_hint is not null and program_hint<>previous_program then 'observed_image_change' end boundary
+            when previous_program is not null and program_hint is not null and program_hint<>previous_program then 'observed_image_change' end AS boundary
         from prior""")
     table('observations',"""select segment,actor,eid,ts,seq,0::tinyint slot,program_hint,boundary from actor_states
         union all select segment,object1::bigint,eid,ts,seq,1::tinyint,null,null from raw_events where k1='Subject'
@@ -111,13 +111,13 @@ def build(out, code):
                 when image_boundary is not null then image_boundary when declared_start is not null then 'declared_or_observed_start'
                 else 'left_censored' end as start_status
            from enriched""")
-    table('event_units',"""select o.eid,min(u.uid) filter(where slot=0) owner,min(u.uid) filter(where slot=1) object1_uid,
+    table('event_units',"""select o.eid,min(u.uid) filter(where slot=0) AS owner,min(u.uid) filter(where slot=1) object1_uid,
         min(u.uid) filter(where slot=2) object2_uid from image_observations o join units u using(segment,actor,image) group by o.eid""")
     table('events',"""select e.* exclude(k1,k2),u.owner,u.object1_uid,u.object2_uid from raw_events e join event_units u using(eid)""")
     table('resource_edges',"""select e.eid,e.owner uid,e.segment,e.object1 resource,1::tinyint slot
         from events e join nodes n on e.object1=n.nid where n.kind<>'Subject'
         union all select e.eid,e.owner,e.segment,e.object2,2::tinyint from events e join nodes n on e.object2=n.nid where n.kind<>'Subject'""")
-    view('resource_events',"""select r.*,e.op,e.ts,case when r.slot=1 then e.direction else 'secondary_reference' end direction,
+    view('resource_events',"""select r.*,e.op,e.ts,case when r.slot=1 then e.direction else 'secondary_reference' end AS direction,
          n.role from resource_edges r join events e using(eid) join nodes n on n.nid=r.resource""")
     table('incidence',"""select distinct uid,resource,segment from resource_edges""")
     table('proc_edges',"""select eid,owner as src_uid,object1_uid as dst_uid,ts,op from events where
