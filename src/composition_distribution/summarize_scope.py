@@ -32,6 +32,16 @@ def summarize(root):
       median(min_component_frequency) FILTER (WHERE composition_frequency=1) median_min_marginal_among_once
       FROM c JOIN status USING("order",hop,composition_type) WHERE units>1 GROUP BY ALL ORDER BY 1,2,3"""
     db.sql(query).write_csv(str(root/'OBSERVED_ACTIVITY_DISTRIBUTION.csv'),header=True)
+    distinct_query="""SELECT c."order",c.hop,count(*) multi_types,
+      sum(composition_frequency)::BIGINT multi_instances,
+      count(*) FILTER (WHERE composition_frequency=1) types_seen_once,
+      count(*) FILTER (WHERE min_component_frequency>composition_frequency) types_min_marginal_gt_joint,
+      count(*) FILTER (WHERE min_component_frequency=1 AND composition_frequency=1) once_with_once_constituent,
+      max(min_component_frequency) FILTER (WHERE composition_frequency=1) maximum_min_marginal_among_once,
+      median(min_component_frequency) FILTER (WHERE composition_frequency=1) median_min_marginal_among_once
+      FROM c JOIN status USING("order",hop,composition_type)
+      WHERE all_identified_and_active AND distinct_unit_types>=2 GROUP BY ALL ORDER BY 1,2"""
+    db.sql(distinct_query).write_csv(str(root/'IDENTIFIED_DISTINCT_TYPE_DISTRIBUTION.csv'),header=True)
     db.sql('SELECT * FROM typed ORDER BY unit_type').write_csv(str(root/'UNIT_TYPE_OBSERVABILITY.csv'),header=True)
 
 
