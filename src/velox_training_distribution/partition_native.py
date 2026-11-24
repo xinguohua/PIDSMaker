@@ -85,6 +85,39 @@ def scalar(db, sql):
     return int(db.execute(sql).fetchone()[0])
 
 
+
+def verify_training_population(root):
+    manifest=json.loads((root/'NATIVE_INPUT_AUDIT.json').read_text())
+    expected={'train_run':'cadets-velox-fork-train-20261124a',
+              'train_commit':'8a7303915422a85dead0a627ab1a031b7ef0c6b5','windows':581,
+              'edge_occurrences':3426589,'native_loader_train_batches':3665,'logged_train_batches':3665}
+    mismatched={k:(v,manifest.get(k)) for k,v in expected.items() if v!=manifest.get(k)}
+    if mismatched:
+        raise ValueError(f'Unexpected Velox training population: {mismatched}')
+    with duckdb.connect() as conn:
+        for view,src in [('e','NATIVE_EDGES/*.parquet'),('n','NATIVE_NODES/*.parquet'),
+                         ('w','NATIVE_WINDOWS.csv'),('b','NATIVE_BATCHES.csv')]:
+            fn='read_csv_auto' if src.endswith('csv') else 'read_parquet'
+            conn.execute(f'create view {view} as select * from {fn}({lit(root/src)})')
+        dims=conn.execute('''select count(*),count(distinct window_id),count(distinct batch_id),
+            count(distinct (window_id,tensor_row)),count(distinct (batch_id,batch_row)) from e''').fetchone()
+        assert dims==(3426589,581,3665,3426589,3426589),dims
+        assert conn.execute('select count(*),count(distinct nid) from n').fetchone()==(
+            manifest['within_window_node_occurrences'],manifest['distinct_node_ids'])
+        assert scalar(conn,'select count(*) from w')==581 and scalar(conn,'select count(*) from b')==3665
+        bad_windows=scalar(conn,'''select count(*) from w full join
+            (select window_id,count(*) n,count(distinct batch_id) b from e group by window_id) g using(window_id)
+            full join (select window_id,count(*) nnode from n group by window_id) ns using(window_id)
+            where w.edges is distinct from g.n or w.batches is distinct from g.b
+               or w.nodes is distinct from ns.nnode''')
+        bad_batches=scalar(conn,'''select count(*) from b full join (
+            select batch_id,window_id,min(tensor_row) lo,max(tensor_row) hi,count(*) n from e group by all
+            ) g using(batch_id,window_id) where b.edges is distinct from g.n
+            or b.first_tensor_row is distinct from g.lo or b.last_tensor_row is distinct from g.hi''')
+        if bad_windows or bad_batches:
+            raise ValueError(f'Unexpected native window or batch membership: {bad_windows}, {bad_batches}')
+
+
 def native_units(root):
     """Index native graph observations, leaving the detector edge payload in place."""
     tmp = root/'native_units.building.duckdb'
@@ -168,7 +201,7 @@ def native_units(root):
         'process_relations':'select * from proc_edges','resource_incidence':'select * from incidence',
         'resource_events':'select * from resource_events',
         'native_node_map':'select nid,window_id,native_nid from nodes',
-        'native_event_index':'select eid,window_id,tensor_row,ts,op,edge_uuid,nx_key,batch_id,batch_row from native_edges',
+        'native_event_index':'select * exclude(src,dst) from native_edges',
         'unreferenced_nodes':'''select n.nid from nodes n anti join
           (select s nid from endpoints union select d from endpoints) used using(nid)''',
         'execute_observations':'select * from exec_observations',
@@ -223,10 +256,11 @@ def audit(db,root):
     count=scalar(db,'select count(*) from native_edges')
     nodes=scalar(db,'select count(*) from native_nodes')
     reduced=scalar(db,'select count(*) from restored')
-    bad=scalar(db,"""select count(*) from native_edges a full outer join restored b using(eid)
+    attrs=[row[0] for row in db.execute('describe native_edges').fetchall() if row[0]!='eid']
+    differences=' or '.join(f'a."{key}" is distinct from b."{key}"' for key in attrs)
+    bad=scalar(db,f"""select count(*) from native_edges a full outer join restored b using(eid)
        where a.eid is null or b.eid is null or
-       (a.src,a.dst,a.ts,a.op,a.window_id,a.tensor_row,a.edge_uuid,a.nx_key,a.batch_id,a.batch_row)
-       is distinct from (b.src,b.dst,b.ts,b.op,b.window_id,b.tensor_row,b.edge_uuid,b.nx_key,b.batch_id,b.batch_row)
+       {differences}
        or b.src_window<>b.window_id or b.dst_window<>b.window_id""")
     db.execute("""create temp table node_key as select m.window_id,m.native_nid nid
        from restored_nodes r join mapping m using(nid)""")
@@ -303,6 +337,7 @@ if __name__=='__main__':
     if opt.stage in ('units','all'):
         if not (root/'NATIVE_INPUT_AUDIT.json').is_file():
             raise SystemExit('Await completed NATIVE_INPUT_AUDIT.json')
+        verify_training_population(root)
         native_units(root)
     if opt.stage!='units':
         with duckdb.connect(str(root/'native_units.duckdb'),read_only=True) as con:
