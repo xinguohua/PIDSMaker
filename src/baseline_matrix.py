@@ -182,10 +182,19 @@ def run(args):
             return
         main(cfg, exp=os.environ['RUN_ID'])
         export(cfg, cell)
+        from baseline_knee import DEFAULT_FP_PER_TP, publish_knee
+        manifest = json.loads((cell/'manifest.json').read_text())
+        calibration = server.get('knee_calibration_manifests', {}).get(f'{args.dataset}/{args.model}')
+        knee = publish_knee(cell, manifest, calibration,
+                            fp_per_tp=server.get('knee_fp_per_tp', DEFAULT_FP_PER_TP))
+        native_metrics = json.loads((cell/'metrics.json').read_text())
         save(status, {'state':'pipeline_finished_pending_acceptance','time':now(),
              'remaining':'verify complete input/split coverage and reconstructed-model reload; smoke is never full'})
         save(out/'summary.json', {'run_id':os.environ['RUN_ID'],'cell':str(cell),
-             'status':json.loads(status.read_text()),'metrics':json.loads((cell/'metrics.json').read_text())})
+             'status':json.loads(status.read_text()),'metrics':native_metrics,'native_metrics':native_metrics,
+             'default_threshold_policy':knee['default_policy'],'default_metrics':knee['metrics'],
+             'threshold_report':str(cell/'knee/report.json'),'threshold_scope':knee['scope'],
+             'exploratory_metrics':knee['exploratory_metrics']})
     except BaseException as exc:
         # Avoid writing credential-bearing exception messages to small returned results.
         save(status, {'state':'failed','time':now(),'error_type':type(exc).__name__,

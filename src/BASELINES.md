@@ -159,3 +159,40 @@ a `repair_attempts` list with dataset/model/path/original_training_run_id. The
 single canonical writer accepts a derived repair only after full replay checks
 and successful real process-resource supervision, preserving the original failed
 attempt. Training resource gaps remain explicitly recorded in the repair lineage.
+
+### Default research operating point
+
+The baseline runner and its verifier apply the same cost-knee rule to the native
+node scores from Velox, OCR-APT, Orthrus, MAGIC and KAIROS. Each new cell includes
+`knee/report.json` and, for a selected cutoff, per-node `knee/objects.jsonl`.
+The summary's `default_metrics` are held-out results from this frozen threshold.
+`native_metrics` and the legacy `metrics` key refer to the original detector.
+During verification, the model is reloaded, the frozen cutoff is reused and
+the per-node knee decisions are checked.
+
+To evaluate a threshold on independent data, point the server-config entry
+`knee_calibration_manifests["CADETS_E3/velox"]` (or the respective dataset/model)
+at a calibration manifest. It contains `model`, `dataset`, the trained model's
+`checkpoint_sha256`, `split: "calibration"`, the source `dates`, and the
+calibration `objects` path (relative to the manifest or absolute) with
+`objects_sha256`. The source must contain a node score and truth label in the
+same native score units and direction for each node, scored using that exact
+checkpoint. Its separate run dates must be disjoint from training and test
+dates. A missing source triggers a retrospective recommendation for the
+current scored set. This is labeled `retrospective_test`; its results are
+reported only in `exploratory_metrics` and `default_metrics` is null.
+A dataset without both label classes cannot establish a recall/error tradeoff.
+
+The shared cost allowance is 100 false-positive nodes per extra true-positive
+node by default. Set the single server option `knee_fp_per_tp` to use another
+allowance across detectors. Each policy record retains the fitted allowance.
+For a completed native export or verified `corrected_export`, run:
+
+```sh
+python src/baseline_knee.py --cell /RUN/EXPORT --manifest /TRAIN_CELL/manifest.json --output /NEW/RESULT --calibration-manifest /CALIBRATION/manifest.json
+```
+
+The post-hoc command writes a fresh derived directory and also accepts
+`--fp-per-tp`. Omit the calibration manifest for an explicit retrospective
+analysis. A selected endpoint with reason `no_alerts_at_this_cost` means
+the fitted cost favors zero alerts over every nonempty alert set.

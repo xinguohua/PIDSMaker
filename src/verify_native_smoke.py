@@ -33,6 +33,8 @@ def main():
  checkpoint=json.loads((cell/'checkpoint.json').read_text())['path']
  original=Path(cfg.training._edge_losses_dir)
  protected=[cell/f for f in ['resolved_config.yml','manifest.json','objects.jsonl','metrics.json','uuid_mapping.json','missing_gt.json','checkpoint.json','export_complete.json']]+[Path(checkpoint)]
+ knee_path=cell/'knee/report.json'
+ if knee_path.exists():protected+=list(knee_path.parent.glob('*.json*'))
  protected+=list(Path(checkpoint).parent.glob('replay_state.pt'))
  protected += [f for f in (cell/'artifacts/featurization').rglob('*') if f.is_file()]
  protected+=list(original.rglob('*.csv'))+list(Path(cfg.evaluation._precision_recall_dir).rglob('*.pth'))
@@ -141,6 +143,14 @@ def main():
   return target,summarize(target/'objects.jsonl')
  replay,replay_metrics=evaluate_at(losses,'corrected_export')
  assert summarize(replay/'objects.jsonl')==replay_metrics
+ from baseline_knee import DEFAULT_FP_PER_TP,publish_knee
+ frozen=json.loads(knee_path.read_text()) if knee_path.exists() else None
+ # Old runs have no frozen knee; assess their corrected export as a new derived analysis.
+ server=json.loads(a.server_config.read_text())
+ calibration=server.get('knee_calibration_manifests',{}).get(f"{manifest['dataset']}/{model_name}")
+ knee=publish_knee(replay,manifest,calibration,frozen=frozen,fp_per_tp=server.get('knee_fp_per_tp',DEFAULT_FP_PER_TP))
+ if frozen is not None and not a.repair_predictions:
+  assert all(knee[k]==frozen[k] for k in ('policy','metrics','exploratory_metrics','decisions_sha256')), 'Frozen threshold replay differs'
  right=pd.read_json(replay/'objects.jsonl',lines=True)
  assert set(right.node_id)==expected_nodes
  if not a.repair_predictions:assert replay_metrics==original_metrics
@@ -151,5 +161,7 @@ def main():
   np.testing.assert_allclose(np.loadtxt(generated),np.loadtxt(reference),rtol=1e-6,atol=1e-7)
  after={str(f):digest(f) for f in protected};save(out/'source_hashes_after.json',after);assert before==after
  checks={k:True for k in ['independent_coverage','model_rebuilt','scores_replayed','decisions_recomputed','source_unchanged']};checks['full_budget']=a.full;checks['scores_replayed']=not a.check_only;checks['full_predictions']=True
- save(out/'summary.json',{'state':'native_outputs_verified' if a.check_only else 'reconstruction_replay_verified','source_cell':str(cell),'checks':checks,'coverage':coverage,'metrics_recomputed':replay_metrics,'comparisons':comparisons,'inference':stats,'changed_parameters':changed,'model_profile':profile,'restored_state':restored,'full_accepted':False if a.repair_predictions else a.full,'repaired_predictions_verified':a.repair_predictions,'original_attempt_accepted':False,'original_metrics_for_lineage_only':original_metrics,'corrected_export':str(replay)})
+ save(out/'summary.json',{'state':'native_outputs_verified' if a.check_only else 'reconstruction_replay_verified','source_cell':str(cell),'checks':checks,'coverage':coverage,'metrics_recomputed':replay_metrics,'native_metrics':replay_metrics,
+  'default_threshold_policy':knee['default_policy'],'default_metrics':knee['metrics'],'threshold_scope':knee['scope'],
+  'threshold_report':str(replay/'knee/report.json'),'exploratory_metrics':knee['exploratory_metrics'],'comparisons':comparisons,'inference':stats,'changed_parameters':changed,'model_profile':profile,'restored_state':restored,'full_accepted':False if a.repair_predictions else a.full,'repaired_predictions_verified':a.repair_predictions,'original_attempt_accepted':False,'original_metrics_for_lineage_only':original_metrics,'corrected_export':str(replay)})
 if __name__=='__main__':main()
