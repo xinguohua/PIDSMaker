@@ -127,7 +127,7 @@ def native_units(root):
     db.execute(f"create or replace view native_nodes as select * from read_parquet({lit(root/'NATIVE_NODES/*.parquet')})")
     db.execute("""create or replace table nodes as select
         (row_number() over(order by window_id,nid)-1)::bigint nid, nid native_nid, window_id, kind,
-        kind role,label,uuid from native_nodes""")
+        kind AS role,label,uuid from native_nodes""")
     db.execute("""create or replace temp table endpoints as select
         e.eid,e.op,e.ts,e.window_id,s.nid s,d.nid d,s.kind='subject' sp,d.kind='subject' dp
         from native_edges e join nodes s on e.window_id=s.window_id and e.src=s.native_nid
