@@ -76,12 +76,8 @@ def read_window(db, w, test, attrs, keys, pred, attack):
         elif test and (u not in pred or v not in pred):
             excluded['unknown'] += 1
         else:
-            source, source_known = attrs[u]
-            destination, destination_known = attrs[v]
-            action = keys[source, op, destination]
-            # Complete signatures are strings. Distinct sentinels prevent unknown joins.
-            edge = (row, source if source_known else -1,
-                    destination if destination_known else -2, action)
+            action = keys[attrs[u][0], op, attrs[v][0]]
+            edge=(row,u,v,action)
             endpoints[row]=(u,v)
             if previous_order != (ns,seq):
                 ordered_groups.append([])
@@ -96,6 +92,7 @@ def compute_one(job, spool_dir):
     ctx = _context
     paths, check, pack = ctx['functions']
     begin = time.monotonic()
+    cpu_start = time.process_time()
     test = split == 'test'
     ordered_groups, endpoints, native_count, excluded = read_window(
         _connection, w, test, ctx['attrs'], ctx['keys'], ctx['pred'], ctx['attack'])
@@ -154,6 +151,9 @@ def compute_one(job, spool_dir):
             if test and k > 1:
                 flags.update(((k, n), b) for n, b in participation.flags(index, endpoints).items())
             membership_s += time.monotonic()-tick
+            audit[f'interval_queries_{k}'] = participation.queries
+            audit[f'covered_intervals_{k}'] = participation.covered
+            audit[f'node_mark_calls_{k}'] = participation.marks
             del participation
             audit['types_'+str(k)] = types
             audit['instances_'+str(k)] = instances
@@ -166,7 +166,8 @@ def compute_one(job, spool_dir):
             pickle.dump(rows, spool, protocol=5)
         pickle.dump(None, spool, protocol=5)
         write_s += time.monotonic()-tick
-    audit.update(read_s=round(read-begin, 6), index_s=round(indexed-read, 6),
+    audit.update(cpu_s=time.process_time()-cpu_start, endpoint_variant_visits=index.variant_visits,
+                 spool_bytes=spool_path.stat().st_size, read_s=round(read-begin, 6), index_s=round(indexed-read, 6),
                  oracle_s=round(oracle_done-indexed, 6), support_query_s=round(support_s,6), membership_s=round(membership_s, 6),
                  spool_write_s=round(write_s, 6), total_s=round(time.monotonic()-begin, 6),
                  peak_rss_mb=rss_mb(), operations=index.operations, branches=index.branches)

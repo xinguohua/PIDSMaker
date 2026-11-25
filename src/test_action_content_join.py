@@ -26,7 +26,15 @@ class ContentJoinTest(unittest.TestCase):
         self.assertEqual(candidate_space(actions, actions, {'a'}, (1,2,3,5)),
                          {1:2,2:4,3:8,5:32})
 
-    def test_equal_content_across_native_ids_joins(self):
+    def test_three_disjoint_paths_share_one_content_type(self):
+        edges = [(i,u,v,1) for i,(u,v) in enumerate([(17,31),(18,32),(19,33)])]
+        tails = [(i+3,u,v,2) for i,(u,v) in enumerate([(31,91),(32,92),(33,93)])]
+        index = ActionIndex([edges,tails])
+        self.assertEqual(list(index.sequences(2)), [((1,2),3)])
+        self.assertEqual(index.nodes((1,2),{i:(u,v) for i,u,v,_ in edges+tails}),
+                         {17,18,19,31,32,33,91,92,93})
+
+    def test_disconnected_instances_do_not_join(self):
         attrs = {17: ('A', 1), 92: ('A', 1), 31: ('B', 1), 84: ('B', 1),
                  7: ('C', 1), 8: ('unknown', 0), 9: ('unknown', 0)}
         events = [(17, 31, 'write', 1), (92, 84, 'write', 2),
@@ -52,14 +60,14 @@ class ContentJoinTest(unittest.TestCase):
                     audit, rows, flags, _ = window.compute_one((1,'test'),tmp)
                 groups, _, _, _ = window.read_window(
                     window._connection, 1, True, attrs, keys, dict.fromkeys(attrs), set())
-                self.assertEqual(ActionIndex(groups).witness((1,2)), (0,2))
+                self.assertEqual(ActionIndex(groups).witness((1,2)), (1,3))
             finally:
                 window._connection.close()
                 window._support.close()
             pairs = [(b,n) for k,b,_,n,_ in window.result_rows(rows) if k==2]
-            self.assertEqual(pairs, [(pack((1,2)), '3')])
-            self.assertEqual(audit['instances_2'],3)
-            self.assertEqual(set(flags),{(2,n) for n in (17,31,92,84,7)})
+            self.assertEqual(pairs, [(pack((1,2)), '1')])
+            self.assertEqual(audit['instances_2'],1)
+            self.assertEqual(set(flags),{(2,n) for n in (92,84,7)})
 
     def test_window_order_support_missing_and_exclusions(self):
         # Same ns with increasing sequence joins; same pair does not. ID 99 is

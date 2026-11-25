@@ -5,7 +5,7 @@ import json
 import time
 
 LENGTHS = (1, 2, 3)
-PROTOCOL = 'content_paths_len3_v1'
+PROTOCOL = 'native_paths_len3_v2'
 
 
 def signature(value):
@@ -22,6 +22,7 @@ class ActionIndex:
         self.variants = defaultdict(list)
         self.ends = {}
         self.out = defaultdict(list)
+        self.variant_visits = 0
         self.operations = 0
         self.branches = 0
         event_ids = set()
@@ -81,7 +82,7 @@ class ActionIndex:
             raise ValueError("unsupported path length")
         last_report = time.monotonic()
         def walk(seq, frontier):
-            # frontier[node][group] counts paths ending on that endpoint signature.
+            # frontier[node][group] counts paths ending on that native endpoint.
             nonlocal last_report
             self.branches += 1
             if progress and time.monotonic() - last_report >= 5:
@@ -127,13 +128,14 @@ class ActionIndex:
         yield from walk((), {})
 
     def _forward(self, seq):
-        # Earliest reachable arrival and its event witness, per endpoint signature.
+        # Earliest reachable arrival and its event witness, per native endpoint.
         previous = {}
         layers = []
         for i, label in enumerate(seq):
             current = {}
             layers.append(previous)
             for edge in self.variants[label]:
+                self.variant_visits += 1
                 u, v = self.ends[edge]
                 if i and u not in previous:
                     continue
@@ -151,6 +153,7 @@ class ActionIndex:
         for i in reversed(range(len(seq))):
             current = {}
             for edge in self.variants[seq[i]]:
+                self.variant_visits += 1
                 u, v = self.ends[edge]
                 if i+1 < len(seq) and v not in following:
                     continue
@@ -179,13 +182,18 @@ class Participation:
     """Union intervals per Action/category, bounded by occupied time groups."""
     def __init__(self):
         self.intervals = defaultdict(list)
+        self.queries = self.covered = self.marks = 0
 
     def add(self, index, seq, bit):
         for a, lo, hi in index.bounds(seq):
+            self.queries += 1
             intervals = self.intervals[a, bit]
             i = bisect_left(intervals, (lo,))
             if i and intervals[i-1][1] >= lo:
                 i -= 1
+            if i < len(intervals) and intervals[i][0] <= lo and hi <= intervals[i][1]:
+                self.covered += 1
+                continue
             j = i
             while j < len(intervals) and intervals[j][0] <= hi:
                 lo = min(lo, intervals[j][0])
@@ -200,5 +208,6 @@ class Participation:
                 for i in range(lo, hi):
                     for eid in index.events[a][i]:
                         for node in endpoints[eid]:
+                            self.marks += 1
                             result[node] |= bit
         return result

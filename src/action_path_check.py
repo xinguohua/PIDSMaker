@@ -53,8 +53,11 @@ def check_real_window(groups, expected_lengths, compute, endpoints=None):
                 seq = tuple(e[3] for e in path)
                 counts[seq] += 1
                 members[seq].update(n for e in path for n in (endpoints[e[0]] if endpoints is not None else e[1:3]))
-        assert {s: result[0] for s, result in observed[k].items()} == counts
-        assert {s: result[2] for s, result in observed[k].items()} == members
+        for seq in counts.keys() | observed[k].keys():
+            got = observed[k].get(seq)
+            if got is None or got[0] != counts[seq] or got[2] != members[seq]:
+                raise ValueError(f"Reference mismatch: length={k}, sequence={seq}, "
+                                 f"expected={(counts[seq], members[seq])}, got={got}, groups={sample}")
         witness_counts[k] = sum(counts.values())
     return dict(event_rows=[e[0] for e in events], longest_path_event_rows=[e[0] for e in chain],
                 longest_requested_length_found=len(chain) == target,
