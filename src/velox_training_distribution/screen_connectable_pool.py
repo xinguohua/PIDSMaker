@@ -30,10 +30,48 @@ for h,a,b,parent,child,eid,donor in db.execute("""with pairs as (select a.hop,a.
     witness.setdefault(k,dict(kind='fork',parent_type=a,eid=eid,parent_uid=parent,child_uid=child,child_donor_uid=donor))
 search=WitnessSearch(db)
 print('direct pairs',len(witness),flush=True)
-for w,path,options in search.paths(pool,direct,True):
-    for key,reverse,da,dbu in options:
-        witness.setdefault(key,dict(kind='chain',window=w,path=path[::-1] if reverse else path,
-            donor_uids=([dbu,da] if reverse else [da,dbu])))
+# Discard already witnessed label pairs before inspecting any port combinations.
+# Mapping a port pair to a path uses the very same excluded-terminal search.
+missing={(h,a):{(h,b) for b in pool[h] if a!=b and (min(a,b),max(a,b)) not in direct[h]
+         and (min(a,b),max(a,b)) in search.potential[h]} for h in pool for a in pool[h]}
+for index,(w,by_uid) in enumerate(search.ports.items()):
+    graph=search.graphs[w]
+    terminals={}
+    for u,ports in by_uid.items():
+        tports={}
+        for z,ts in ports.items():
+            for tag,du in ts.items():tports.setdefault(tag,[]).append((z,du))
+        terminals[u]=tports
+    seen=set()
+    for start in terminals:
+        if start in seen:continue
+        comp={start};stack=[start]
+        while stack:
+            for other in graph[stack.pop()]:
+                if other not in comp:comp.add(other);stack.append(other)
+        seen.update(comp)
+        for u,v in itertools.combinations(sorted(comp.intersection(terminals)),2):
+            tu,tv=terminals[u],terminals[v]
+            cached={}
+            for label,p1 in tu.items():
+                for peer in missing[label].intersection(tv):
+                    h,a=label;_,b=peer
+                    found=False
+                    for x,da in p1:
+                        if x==v:continue
+                        for y,dbu in tv[peer]:
+                            if y==u:continue
+                            if (x,y) not in cached:
+                                cached[x,y]=next(search.middle(graph,x,y,{u,v},False),None)
+                            center=cached[x,y]
+                            if center is None:continue
+                            path=(u,)+center+(v,)
+                            witness[h,min(a,b),max(a,b)]=dict(kind='chain',window=w,
+                                path=path if a<b else path[::-1],donor_uids=[da,dbu] if a<b else [dbu,da])
+                            missing[label].discard(peer);missing[peer].discard(label)
+                            found=True;break
+                        if found:break
+    if index%100==0:print('windows',index,'witnesses',len(witness),flush=True)
 print('witnessed',len(witness),flush=True)
 selected={h:set() for h in pool}
 with (res/'SELECTED_BEHAVIORS.csv').open() as f:
