@@ -7,8 +7,8 @@ from action_path_check import check_real_window
 from action_window import configure,window_results,result_rows
 LENGTHS=(1,2,3,5)
 
-def paths(edges, memberships=False, groups=None):
- """Combine identical typed prefixes at their actual terminal node.
+def paths(edges, memberships=False, groups=None, endpoints=None):
+ """Combine identical typed prefixes at their terminal content signature.
 
  Update lengths in descending order for every group of indistinguishable
  timestamps and source sequence numbers. No event in that group can extend
@@ -33,7 +33,8 @@ def paths(edges, memberships=False, groups=None):
     future=last_two if k==3 else last_out
     keep=k<5 and future.get(v,-1)>i
     if k==4 and not keep:continue
-    previous=[((),(1,(),{u} if memberships else None))] if k==1 else states[k-1].get(u,{}).items()
+    actual=endpoints[eid] if endpoints is not None and memberships else (u,v)
+    previous=[((),(1,(),set() if memberships else None))] if k==1 else states[k-1].get(u,{}).items()
     prefix_table=states[k][v] if keep else None
     total_table=totals.get(k)
     if prefix_table is None:
@@ -47,12 +48,12 @@ def paths(edges, memberships=False, groups=None):
      for table in targets:
       old=table.get(seq)
       if old is None:
-       table[seq]=[n,w+(eid,),ns|{v} if memberships else None]
+       table[seq]=[n,w+(eid,),ns.union(actual) if memberships else None]
       else:
        old[0]+=n
        if memberships:
         old[2].update(ns)
-        old[2].add(v)
+        old[2].update(actual)
   for _,u,_,_ in batch:
    if last_out[u]==i:
     for table in states[1:]:table.pop(u,None)
@@ -92,7 +93,11 @@ def pack(seq):return struct.pack('<'+'I'*len(seq),*seq)
 def unpack(b):return struct.unpack('<'+'I'*(len(b)//4),b)
 
 def analyze(a):
- selfcheck();root=a.root;out=root/'results';out.mkdir(exist_ok=True)
+ selfcheck();root=a.root;run=root/'content_join_v1';out=run/'results';out.mkdir(parents=True,exist_ok=True)
+ (out/'MATCHING_RULES.md').write_text(
+  '# 内容连接的事件序列\n\n在同一原生窗口内，前一事件目标与后一事件来源的完整语义签名相同，且时间及序号严格递增，即计为一次内容连接。'
+  '缺少识别属性的端点无法作为连接依据。不同原生 ID 可以相接，每个见证保留全部事件及原生端点。'
+  '按有序事件行序列计实例，按有序 Action 签名计类型。节点检测分组使用实际参与事件的节点 ID。\n',encoding='utf-8')
  for name in ('COMPOSITION_COUNTS','ACTION_DISTRIBUTIONS'): (out/name).mkdir(exist_ok=True)
  db=ro(root/'native.sqlite')
  db.execute('attach database ? as sem',('file:'+str(root/'semantic.sqlite')+'?mode=ro&immutable=1',))
@@ -117,7 +122,7 @@ def analyze(a):
   if key not in action_key:
    t=len(action_key)+1;action_key[key]=t;actions[t]=key
    if not(sc and dc):missing_action.add(t)
- counts=sqlite3.connect(root/'counts.sqlite')
+ counts=sqlite3.connect(run/'counts.sqlite')
  counts.create_function('bigadd',2,lambda x,y:str(int(x)+int(y)))
  counts.executescript("""pragma journal_mode=wal; pragma synchronous=normal; pragma cache_size=-1048576; pragma wal_autocheckpoint=262144;
   create table if not exists counts(k integer,seq blob,train text,test text,w integer,witness blob,primary key(k,seq)) without rowid;
@@ -148,7 +153,7 @@ def analyze(a):
    done.add(w);remaining-=1
    if len(done)%12==0 or remaining==0 or sum(audit[f'types_{k}'] for k in LENGTHS)>200000:
     counts.commit()
-    dump(root/'PROGRESS.json',dict(window=w,split=split,windows_done=len(done),last_window=audit))
+    dump(run/'PROGRESS.json',dict(window=w,split=split,windows_done=len(done),last_window=audit))
     print('committed windows',len(done),split,flush=True)
   if split=='train':
    for k,b in counts.execute("select k,seq from counts where train!='0'"):
@@ -168,10 +173,12 @@ def analyze(a):
   for t,n in dp.items():by[actions[t][2]]+=n
   dp={t:by[actions[t][0]] for t in known_train}
   candidate[k]=sum(dp.values())
+ complete_endpoints={s for s,complete in attrs.values() if complete}
  observable_dp={t:1 for t in all_train};observable_space={1:len(all_train)}
  for k in range(2,6):
   by=Counter()
-  for t,n in observable_dp.items():by[actions[t][2]]+=n
+  for t,n in observable_dp.items():
+   if actions[t][2] in complete_endpoints:by[actions[t][2]]+=n
   observable_dp={t:by[actions[t][0]] for t in all_train}
   observable_space[k]=sum(observable_dp.values())
  summary=[];corr=[];examples=[]
@@ -220,7 +227,7 @@ def analyze(a):
      q=db.execute('select e.*,r.seq,r.actor,r.obj,r.file,r.line,r.offset from edges e join sem.source r using(w,row) where e.w=? and e.row=?',(w,row)).fetchone()
      ev.append(dict(zip(['window','row','source_id','destination_id','timestamp_ns','operation','event_uuid','edge_label','sequence','actor_uuid','object_uuid','raw_file','raw_line','raw_offset'],q)))
     assert len({e['event_uuid'] for e in ev})==k
-    assert all(x['destination_id']==y['source_id'] and (x['timestamp_ns'],x['sequence'])<(y['timestamp_ns'],y['sequence']) for x,y in zip(ev,ev[1:]))
+    assert all(attrs[x['destination_id']][1] and attrs[y['source_id']][1] and attrs[x['destination_id']][0]==attrs[y['source_id']][0] and (x['timestamp_ns'],x['sequence'])<(y['timestamp_ns'],y['sequence']) for x,y in zip(ev,ev[1:]))
     examples.append(dict(length=k,category=kind,actions=list(seq),action_train_frequencies=support,train_frequency=tr,test_frequency=te,events=ev,entity_semantics={str(n):json.loads(attrs[n][0]) for e in ev for n in (e['source_id'],e['destination_id'])}))
   assert (sum_train,sum_test)==(train_instances,test_instances)
   potential=candidate[k]-seen-zs;assert potential>=0
@@ -268,7 +275,7 @@ def analyze(a):
   baseline=json.loads((a.cell/'metrics.json').read_text());assert len(groups['All'])==baseline['FP']+baseline['TN'];assert sum(r[1] for r in groups['All'])==baseline['FP']
  write(out/'DETECTION_PERFORMANCE.csv',['length','group','nodes','TP','FP','TN','FN','FPR','FNR','status','score_min','score_median_lower','score_max'],performance)
  write(out/'NODE_SCORES.csv',['length','node_id','gt','prediction','score','threshold','group','membership_bits'],node_rows)
- dump(out/'ANALYSIS_AUDIT.json',dict(exact_dp=True,sampling=False,path_lengths=LENGTHS,no_duplicate_event_per_path=True,order='raw timestampNanos, raw sequence',windows=len(audits),semantic_unknown_actions=len(missing_action),candidate_scope='fully identified semantic endpoints only',baseline_matched=True,known_attack_nodes=len(attack),source=str(root/'native.sqlite')))
+ dump(out/'ANALYSIS_AUDIT.json',dict(join_rule="equal_complete_endpoint_content",exact_dp=True,sampling=False,path_lengths=LENGTHS,no_duplicate_event_per_path=True,order='raw timestampNanos, raw sequence',windows=len(audits),semantic_unknown_actions=len(missing_action),candidate_scope='fully identified semantic endpoints only',baseline_matched=True,known_attack_nodes=len(attack),source=str(root/'native.sqlite')))
  print('COMPLETE observable statistics; see semantic completeness limitation',flush=True)
 
 if __name__=='__main__':

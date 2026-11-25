@@ -14,7 +14,10 @@ _connection = None
 
 def configure(root, attrs, keys, pred, attack, missing, train_actions, train_types, functions):
     global _context
-    _context = dict(root=root, attrs=attrs, keys=keys, pred=pred, attack=attack,
+    classes = {}
+    join_keys = {node: classes.setdefault(signature, len(classes))
+                 for node, (signature, complete) in attrs.items() if complete}
+    _context = dict(root=root, join_keys=join_keys, attrs=attrs, keys=keys, pred=pred, attack=attack,
                     missing=missing, train_actions=train_actions, train_types=train_types,
                     functions=functions)
 
@@ -49,6 +52,7 @@ def compute_one(job, spool_dir):
     edges = _connection.execute('''select e.row,e.u,e.v,e.ns,e.op,e.uuid,e.y,r.seq
         from edges e join sem.source r using(w,row) where e.w=? order by e.ns,r.seq''', (w,))
     good = []
+    endpoints = {}
     uuids = set()
     previous_order = None
     ordered_groups=[]
@@ -62,7 +66,9 @@ def compute_one(job, spool_dir):
             excluded['unknown'] += 1
         else:
             action = ctx['keys'][ctx['attrs'][u][0], op, ctx['attrs'][v][0]]
-            edge=(row,u,v,action)
+            # Missing content cannot establish a join, even with another missing endpoint.
+            edge=(row,ctx['join_keys'].get(u,-1),ctx['join_keys'].get(v,-2),action)
+            endpoints[row]=(u,v)
             good.append(edge)
             if previous_order != (ns,seq):
                 ordered_groups.append([])
@@ -70,10 +76,10 @@ def compute_one(job, spool_dir):
             ordered_groups[-1].append(edge)
     read = time.monotonic()
     lengths = (1, 2, 3, 5)
-    real = check([group[0] for group in ordered_groups], lengths, paths) if w == 0 else None
+    real = check([group[0] for group in ordered_groups], lengths, paths, endpoints) if w == 0 else None
     if w == 0 and real is None:
         raise ValueError('No reference chain in validation window')
-    totals = paths(good, test, ordered_groups)
+    totals = paths(good, test, ordered_groups, endpoints)
     exact_total = independent_instance_counts(ordered_groups)
     dp_done = time.monotonic()
     audit = dict(window=w, split=split, native_edges=len(uuids), normal_edges=len(good),
