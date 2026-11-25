@@ -27,24 +27,30 @@ class Matcher:
         self.meta={n:(k,r or 'unknown',p or '') for n,k,r,p in db.execute('select n.nid,n.kind,n.role,u.program from g.nodes n left join g.units u on n.nid=u.subject').fetchall()}
         self.bb=defaultdict(list)
         for u,a,b,h in db.execute('select * from t.bundles').fetchall():self.bb[u].append((a,b,h))
-        self.graphs=defaultdict(nx.Graph)
+        self.window_units=defaultdict(set)
+        self.relations=defaultdict(list)
         self.native=defaultdict(lambda:defaultdict(set))
         self.edges=defaultdict(list)
         self.event_owner=dict(db.execute('select eid,uid from t.actor').fetchall())
-        for u,(_,_,t) in self.units.items():self.graphs[self.windows[u]].add_node(u,tag=t)
+        for u in self.units:self.window_units[self.windows[u]].add(u)
         # Necessary matching graph: all shared endpoints and original process links.
         for obj,group in it.groupby(db.execute('select obj,uid from t.endpoint_use order by obj,uid').fetchall(),lambda r:r[0]):
             us=[u for _,u in group]
-            for a,b in it.combinations(us,2):
-                assert self.windows[a]==self.windows[b]
-                self.graphs[self.windows[a]].add_edge(a,b)
-        for a,b in db.execute('select src_uid,dst_uid from g.proc_edges').fetchall():self.graphs[self.windows[a]].add_edge(a,b)
+            if us:self.relations[self.windows[us[0]]].append(us)
+        for a,b in db.execute('select src_uid,dst_uid from g.proc_edges').fetchall():self.relations[self.windows[a]].append([a,b])
         for w,u,v,e in db.execute('''select r.segment,r.uid,-1-r.resource,r.eid from g.resource_events r
             union all select w,src_uid,dst_uid,eid from forks''').fetchall():
             if u==v:continue
             self.native[w][u].add(v);self.native[w][v].add(u)
             self.edges[w,min(u,v),max(u,v)].append(e)
         self.cert_cache={}
+
+    def graph(self,w,us):
+        us=set(us);g=nx.Graph()
+        for u in us:g.add_node(u,tag=self.units[u][2])
+        for group in self.relations[w]:
+            g.add_edges_from(it.combinations(us.intersection(group),2))
+        return g
 
     def certificate(self,us):
         us=tuple(sorted(us))
@@ -71,13 +77,19 @@ class Matcher:
             # S- types have no internal process self-loop; don't silently add one.
             loops={u for u, in self.db.execute('select distinct src from t.process where src=dst').fetchall()}
             return [(u,) for u in self.units if self.units[u][2]==tag and u not in loops]
-        pattern=self.graphs[w].subgraph(rep).copy()
+        pattern=self.graph(w,rep)
         target=self.certificate(rep);wanted=Counter(self.units[u][2] for u in rep)
         found=set();tested=set()
-        for ww,host in self.graphs.items():
-            counts=Counter(nx.get_node_attributes(host,'tag').values())
+        for ww,window_us in self.window_units.items():
+            counts=Counter(self.units[u][2] for u in window_us)
             if any(counts[t]<n for t,n in wanted.items()):continue
-            h=host.subgraph([u for u in host if self.units[u][2] in wanted])
+            candidates=tuple(sorted(u for u in window_us if self.units[u][2] in wanted))
+            # A single possible member set needs one certificate, not factorial automorphisms.
+            if len(candidates)==len(rep):
+                if self.certificate(candidates)==target:found.add(candidates)
+                print('embedded unique subset',ww,len(rep),flush=True)
+                continue
+            h=self.graph(ww,candidates)
             gm=nx.algorithms.isomorphism.GraphMatcher(h,pattern,node_match=lambda a,b:a['tag']==b['tag'])
             for mapping in gm.subgraph_monomorphisms_iter():
                 us=tuple(sorted(mapping))
