@@ -109,11 +109,17 @@ def analyze(a):
   jobs=[(w,split) for w, in db.execute('select w from windows where split=? order by w',(split,)) if w not in done]
   configure(root,attrs,action_key,pred,attack,missing_action,all_train,all_train_sequences,(paths,check_real_window,pack))
   remaining=len(jobs)
+  # Counts are decimal TEXT because some paths exceed SQLite's integer range.
+  # The sum of two nonnegative 18-digit values fits a signed 64-bit integer.
+  column=split
+  merge_sql=f"""insert into counts values(?,?,?,?,?,?) on conflict(k,seq)
+      do update set {column}=case
+      when length({column})<=18 and length(excluded.{column})<=18
+      then {column}+excluded.{column} else bigadd({column},excluded.{column}) end"""
   for audit,rows,node_flags,real in window_results(jobs,a.workers):
    w=audit['window'];start=time.monotonic()
    if real:dump(out/'REAL_PATH_CHECK.json',dict(window=w,**real))
-   counts.executemany("""insert into counts values(?,?,?,?,?,?) on conflict(k,seq)
-       do update set train=bigadd(train,excluded.train),test=bigadd(test,excluded.test)""",rows)
+   counts.executemany(merge_sql,rows)
    counts.executemany("""insert into node_flags values(?,?,?) on conflict(k,id)
        do update set bits=bits|excluded.bits""", ((k,n,b) for (k,n),b in node_flags.items()))
    audit['write_s']=round(time.monotonic()-start,4)

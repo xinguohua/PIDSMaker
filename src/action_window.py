@@ -121,8 +121,8 @@ def window_results(jobs, workers):
                 next(it)
             while pending:
                 finished, pending = wait(pending, return_when=FIRST_COMPLETED)
-                for future in finished:
-                    yield future.result()
+                while finished:
+                    yield finished.pop().result()
                     job = next(it, None)
                     if job is not None:
                         pending.add(pool.submit(compute_one, job))
