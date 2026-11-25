@@ -6,6 +6,9 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+# Full native semantic signatures may exceed the csv module default.
+csv.field_size_limit(sys.maxsize)
+
 root = Path(sys.argv[1]) if len(sys.argv)>1 else Path(__file__).resolve().parent
 
 def rows(name):

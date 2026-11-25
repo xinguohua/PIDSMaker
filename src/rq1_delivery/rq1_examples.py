@@ -6,6 +6,9 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+# Full native semantic signatures may exceed the csv module default.
+csv.field_size_limit(sys.maxsize)
+
 out, root = map(Path, sys.argv[1:])
 sys.path.insert(0, str(out/'CODE'))
 from action_paths import pack, node_category

@@ -5,6 +5,9 @@ import math
 import sys
 from collections import Counter
 from pathlib import Path
+
+# Full native semantic signatures may exceed the csv module default.
+csv.field_size_limit(sys.maxsize)
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt

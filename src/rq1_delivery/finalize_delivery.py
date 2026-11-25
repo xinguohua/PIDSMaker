@@ -9,6 +9,9 @@ import sys
 import zipfile
 from pathlib import Path
 
+# Full native semantic signatures may exceed the csv module default.
+csv.field_size_limit(sys.maxsize)
+
 root=Path(sys.argv[1])
 stage=Path(sys.argv[2])
 protocol_dir=root/'native_paths_len3_v2'
