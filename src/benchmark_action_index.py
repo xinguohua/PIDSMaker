@@ -23,6 +23,8 @@ def worker(case, method):
     if method=='reference':
         source=subprocess.check_output(['git','show',BASELINE+':src/action_paths.py'],text=True,
                                        cwd=Path(__file__).resolve().parents[1])
+        # Restrict the historical kernel's literal depth loop to the measured lengths.
+        source=source.replace('for k in (5,4,3,2,1):', 'for k in reversed(LENGTHS):')
         node=next(n for n in ast.parse(source).body if isinstance(n,ast.FunctionDef) and n.name=='paths')
         scope=dict(defaultdict=defaultdict,LENGTHS=LENGTHS)
         exec(compile(ast.Module(body=[node],type_ignores=[]),'<frozen-content-reference>','exec'),scope)

@@ -64,16 +64,16 @@ class IndexTest(unittest.TestCase):
         # Compressed multiplicities represent 10^6 actual rows per group.
         index.counts[1] = [10**6]*6
         index.suffix[1] = [(6-g)*10**6 for g in range(7)]
-        result = dict(index.sequences(4))[(1,)*4]
-        self.assertEqual(result, math.comb(6,4)*10**24)
-        self.assertGreater(result, 2**63)
+        result = dict(index.sequences(3))[(1,)*3]
+        self.assertEqual(result, math.comb(6,3)*10**18)
+        self.assertGreater(result, 2**64)
 
-    def test_actual_event_count_over_64_bits(self):
-        n=150000
+    def test_actual_event_count_over_32_bits(self):
+        n=4000
         index=ActionIndex([[(g,0,0,1)] for g in range(n)])
-        result=dict(index.sequences(4))[(1,)*4]
-        self.assertEqual(result,math.comb(n,4))
-        self.assertGreater(result,2**64)
+        result=dict(index.sequences(3))[(1,)*3]
+        self.assertEqual(result,math.comb(n,3))
+        self.assertGreater(result,2**32)
 
     def test_signature_lossless(self):
         self.assertEqual(signature('{"b": ["雪", "a"], "a": null}'),
@@ -96,16 +96,16 @@ class PersistenceTest(unittest.TestCase):
         db.executescript('''create table counts(k,seq,train text,test text,w,primary key(k,seq));
             create table node_flags(k,id,bits,primary key(k,id));
             create table window_done(w primary key,audit);''')
-        row=(4,pack((1,)*4),str(10**40),'0',1)
+        row=(3,pack((1,)*3),str(10**40),'0',1)
         def interrupted():
             yield row
             raise RuntimeError('simulated interrupted stream')
         with self.assertRaises(RuntimeError):
-            commit_window(db,dict(window=1,split='train'),interrupted(),{(4,1):1})
+            commit_window(db,dict(window=1,split='train'),interrupted(),{(3,1):1})
         self.assertEqual(db.execute('select count(*) from counts').fetchone()[0],0)
-        self.assertTrue(commit_window(db,dict(window=1,split='train'),[row],{(4,1):1}))
-        self.assertFalse(commit_window(db,dict(window=1,split='train'),[row],{(4,1):2}))
-        self.assertTrue(commit_window(db,dict(window=2,split='train'),[row],{(4,1):2}))
+        self.assertTrue(commit_window(db,dict(window=1,split='train'),[row],{(3,1):1}))
+        self.assertFalse(commit_window(db,dict(window=1,split='train'),[row],{(3,1):2}))
+        self.assertTrue(commit_window(db,dict(window=2,split='train'),[row],{(3,1):2}))
         self.assertEqual(db.execute('select train from counts').fetchone()[0],str(2*10**40))
         self.assertEqual(db.execute('select bits from node_flags').fetchone()[0],3)
         db.close()

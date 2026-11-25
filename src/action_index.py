@@ -4,8 +4,8 @@ from collections import defaultdict
 import json
 import time
 
-LENGTHS = (1, 2, 3, 4)
-PROTOCOL = 'native_paths_len4_v1'
+LENGTHS = (1, 2, 3)
+PROTOCOL = 'native_paths_len3_v1'
 
 
 def signature(value):
