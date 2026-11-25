@@ -88,6 +88,7 @@ def recover(a):
        attrs[u]['paths'].add(path)
      if uid not in wanted:continue
      actor=unbox(r.get('subject'));obj=unbox(r.get('predicateObject'));ex=r.get('properties',{}).get('map',{}).get('exec')
+     if actor in attrs and present(ex):attrs[actor]['cmds'].add(ex)
      batch.append((uid,int(r['timestampNanos']),unbox(r.get('sequence')),actor,obj,r['type'],str(fp),ln,start,ex))
      count+=1
      if len(batch)>=10000:db.executemany('insert into raw_events values(?,?,?,?,?,?,?,?,?,?)',batch);batch=[]
