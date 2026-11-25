@@ -54,19 +54,24 @@ def setup(db, source, n):
         join g.nodes n on s.resource=n.nid""")
     db.execute("""create temp table access as select hop,tag,rid,sid,min(eid) eid from ports
         semi join shared using(rid) group by all""")
-    db.execute("""create temp table sp as select hop,tag,cid,uid,w,sid,'member' AS role,
-        NULL::BIGINT eid from m union all select m.hop,m.tag,m.cid,m.uid,m.w,n.native_nid,
-        e.op||'/'||e.direction,e.eid from m join t.actor e using(uid)
-        join g.nodes n on n.nid=e.a where n.kind='subject'""")
-    db.execute("create temp table subj as select distinct hop,tag,sid from sp")
-    db.execute("""create temp table sameproc as select distinct a.hop,a.tag a,b.tag b from
-        (select distinct hop,tag,cid,sid from sp) a join
-        (select distinct hop,tag,cid,sid from sp) b on a.hop=b.hop and a.sid=b.sid
-        and a.cid<>b.cid and a.tag<=b.tag""")
+    db.execute("create temp table subj as select distinct hop,tag,sid from m")
     db.execute("""create temp table rpair as select distinct a.hop,a.tag a,b.tag b from access a
         join access b on a.hop=b.hop and a.rid=b.rid and a.tag<=b.tag and a.sid<>b.sid""")
     db.execute("""create temp table ppair as select distinct a.hop,least(a.tag,b.tag) a,greatest(a.tag,b.tag) b
-        from forks f join subj a on f.pa=a.sid join subj b on b.hop=a.hop and f.ch=b.sid""")
+        from forks f join m a on f.src_uid=a.uid join subj b on b.hop=a.hop and f.ch=b.sid""")
+    db.execute("""create temp table members as select m.*,u.program from m join g.units u using(uid)""")
+    # Full per-object event bundle includes native operations, directions, repetition and local ordering.
+    db.execute("""create temp table sites as select i.uid,i.segment w,-1-i.resource z,
+        n.native_nid rid,u.program,b.h from g.incidence i join g.nodes n on n.nid=i.resource
+        join g.units u using(uid) join t.bundles b on b.uid=i.uid and b.a=i.resource and b.b is null
+        semi join shared using(rid)""")
+    db.execute("""create temp table donor_ports as select m.hop,m.tag,s.rid,s.program,s.h,
+        min(m.uid) du from sites s join m using(uid) group by all""")
+    db.execute("""create temp table ends as select d.hop,d.tag,s.uid,s.w,s.z,d.du from sites s
+        join donor_ports d using(rid,program,h)
+        union all select m.hop,m.tag,f.src_uid,f.w,f.dst_uid,m.uid from forks f join m on m.uid=f.src_uid
+        union all select m.hop,m.tag,f.dst_uid,f.w,f.src_uid,min(m.uid) from forks f join m on m.sid=f.ch
+        group by all""")
 
 def clique(order, graph, k):
     if k==0:
@@ -80,39 +85,6 @@ def clique(order, graph, k):
             if rest is not None:
                 return [node]+rest
     return None
-
-
-def linked_graphs(db):
-    """Components only index search. Reconstruct every retained indirect witness below."""
-    import igraph as ig
-    rows=db.execute("""select distinct u.segment,u.uid,-1-i.resource node from g.incidence i
-        join g.units u using(uid) semi join (select resource from g.incidence group by resource
-        having count(*)>1) shared using(resource)
-        union all select w,src_uid,dst_uid from forks order by 1""").fetchall()
-    subjects=dict(db.execute("select uid,native_nid from g.units").fetchall())
-    anchors=defaultdict(lambda:defaultdict(set))
-    for h,tag,sid in db.execute('select * from subj').fetchall():
-        anchors[sid][h].add(tag)
-    graphs={}; possibilities=defaultdict(set)
-    for w, chunk in itertools.groupby(rows,key=lambda r:r[0]):
-        edges=[(a,b) for _,a,b in chunk]
-        ids=sorted(set(itertools.chain.from_iterable(edges)))
-        ix={v:i for i,v in enumerate(ids)}
-        g=ig.Graph(len(ids),[(ix[a],ix[b]) for a,b in edges])
-        graphs[w]=(g,ids,ix)
-        for comp in g.connected_components():
-            tags=defaultdict(lambda:defaultdict(set))
-            for j in comp:
-                uid=ids[j]
-                if uid<0:continue
-                sid=subjects[uid]
-                for h,types in anchors.get(sid,{}).items():
-                    for tag in types:tags[h][tag].add(uid)
-            for h,groups in tags.items():
-                for a,b in itertools.combinations_with_replacement(sorted(groups),2):
-                    if len(groups[a]|groups[b])>1:
-                        possibilities[h].add((a,b))
-    return graphs,possibilities,subjects,anchors
 
 
 def main():
@@ -133,33 +105,41 @@ def main():
     output(args.out/'TOP_N_BEHAVIORS.csv','hop rank behavior_type frequency',ranking)
     ranks={(h,t):(r,f) for h,r,t,f in ranking}
     direct=defaultdict(set)
-    for h,a,b in db.execute('select * from rpair union select * from ppair union select * from sameproc').fetchall():
+    for h,a,b in db.execute('select * from rpair union select * from ppair').fetchall():
         direct[h].add((a,b))
     print('direct',[(h,len(direct[h])) for h in range(1,6)],flush=True)
-    graphs,possible,subjects,anchors=linked_graphs(db)
+    from connectable_chains import WitnessSearch
+    search=WitnessSearch(db)
     adjacent=defaultdict(lambda:defaultdict(set))
+    possible=search.potential
     for h in range(1,6):
         for a,b in possible[h]|direct[h]:
             adjacent[h][a].add(b)
             adjacent[h][b].add(a)
     common=set.intersection(*[{t for hh,r,t,f in ranking if hh==h} for h in range(1,6)])
     order=sorted(common,key=lambda t:(sum(ranks[h,t][0] for h in range(1,6)),tuple(ranks[h,t][0] for h in range(1,6)),t))
-    combined={t:set.intersection(*(adjacent[h][t] for h in range(1,6))) for t in common}
-    shared=clique(order,combined,10)
-    chosen={}
-    for h in range(1,6):
-        ordered=[t for hh,r,t,f in ranking if hh==h]
-        choice=shared or clique(ordered,adjacent[h],10)
-        if choice is None:
-            if args.top<500:raise RuntimeError('expand initial ranking')
-            choice=next(c for k in range(9,0,-1) if (c:=clique(ordered,adjacent[h],k)) is not None)
-        chosen[h]=sorted(choice,key=lambda t:ranks[h,t][0])
+    while True:
+        combined={t:set.intersection(*(adjacent[h][t] for h in range(1,6))) for t in common}
+        shared=clique(order,combined,10)
+        chosen={}
+        for h in range(1,6):
+            ordered=[t for hh,r,t,f in ranking if hh==h]
+            choice=shared or clique(ordered,adjacent[h],10)
+            if choice is None:
+                if args.top<500:raise RuntimeError('expand initial ranking')
+                choice=next(c for k in range(9,0,-1) if (c:=clique(ordered,adjacent[h],k)) is not None)
+            chosen[h]=sorted(choice,key=lambda t:ranks[h,t][0])
+        missing=search.validate(chosen,direct)
+        if not missing:break
+        for h,a,b in missing:
+            adjacent[h][a].discard(b)
+            adjacent[h][b].discard(a)
     output(args.out/'SELECTED_BEHAVIORS.csv','hop position rank behavior_type frequency',[
         (h,i,*[ranks[h,t][0],t,ranks[h,t][1]]) for h,types in chosen.items() for i,t in enumerate(types,1)])
     print('selected',[(h,[ranks[h,t][0] for t in types],sum(tuple(sorted((a,b))) not in direct[h] for a,b in itertools.combinations(types,2))) for h,types in chosen.items()],flush=True)
     if args.selection_only:return
     from connectable_matches import run
-    run(db,args,chosen,direct,possible,graphs,subjects,anchors,ranks)
+    run(db,args,chosen,direct,search,ranks)
 
 if __name__=='__main__':
     main()

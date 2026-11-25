@@ -13,24 +13,16 @@ def dumped(obj):
     return json.dumps(obj,sort_keys=True,separators=(',',':'))
 
 
-def run(db,args,chosen,direct,possible,graphs,subjects,anchors,ranks):
+def run(db,args,chosen,direct,search,ranks):
     out=args.out
     db.execute('create temp table chosen(hop int,tag varchar)')
     db.executemany('insert into chosen values (?,?)',[(h,t) for h,ts in chosen.items() for t in ts])
-    db.execute("""create temp table p as select distinct hop,tag,cid,uid,w,sid,role,eid
-        from sp semi join chosen using(hop,tag)""")
+    db.execute("""create temp table p as select hop,tag,cid,uid,w,sid,'member' AS role,
+        NULL::bigint eid from m semi join chosen using(hop,tag)""")
     db.execute("""create temp table r as select p.*,a.ord from ports p
         semi join chosen using(hop,tag) semi join shared using(rid) join t.actor a using(eid)""")
-    # Only a concrete membership and a separately witnessed chain are needed for nomination.
-    owners={(h,u):c for h,u,c in db.execute('select hop,uid,cid from m semi join chosen using(hop,tag)').fetchall()}
-    donor=defaultdict(dict)
-    actual_all=defaultdict(set)
-    donor_alt=defaultdict(dict)
-    for h,t,c,u,w,s,role,eid in db.execute('select * from p order by cid,uid,role,eid').fetchall():
-        donor[s].setdefault((h,t,role),(c,u,w,eid))
-        actual_all[w,s,h,t,role].add(c)
-        slots=donor_alt[s,h,t,role]
-        if len(slots)<2:slots.setdefault(c,(c,u,w,eid))
+    members={(h,u):(c,t) for h,u,c,t in db.execute('select hop,uid,cid,tag from p').fetchall()}
+    allcid={(h,u):c for h,u,c in db.execute('select hop,uid,cid from assignment').fetchall()}
     schemas={}
     instances=defaultdict(set)
     orient_instances=defaultdict(set)
@@ -47,9 +39,6 @@ def run(db,args,chosen,direct,possible,graphs,subjects,anchors,ranks):
     # Each query produces per-structure donor evidence, then scans all same-window matches.
     common="a.hop=b.hop and (a.tag<b.tag or (a.tag=b.tag and a.cid<b.cid)) and a.cid<>b.cid"
     sqls={
-      'shared_subject':f"""select a.*,b.tag bt,b.cid bc,b.uid bu,b.w bw,b.eid be,
-        to_json([a.role,b.role]) layout,'unoriented' ori,-1::bigint extra
-        from p a join p b on {common} and a.sid=b.sid""",
       'shared_resource':f"""select a.hop,a.tag,a.cid,a.uid,a.w,a.rid sid,a.op AS role,a.eid,
         b.tag bt,b.cid bc,b.uid bu,b.w bw,b.eid be,
         to_json([a.kind,a.unit_type,a.op,a.direction,a.ord::varchar,
@@ -60,8 +49,8 @@ def run(db,args,chosen,direct,possible,graphs,subjects,anchors,ranks):
         b.tag bt,b.cid bc,b.uid bu,b.w bw,b.eid be,
         to_json([a.role,f.op,b.role]) layout,
         case when f.pa=a.sid then 'A_to_B' else 'B_to_A' end ori,f.eid extra
-        from p a join forks f on f.pa=a.sid or f.ch=a.sid join p b on {common}
-        and b.sid=case when f.pa=a.sid then f.ch else f.pa end"""
+        from p a join forks f on f.src_uid=a.uid or f.ch=a.sid join p b on {common}
+        and ((f.src_uid=a.uid and b.sid=f.ch) or (f.ch=a.sid and b.uid=f.src_uid))"""
     }
     for family,sql in sqls.items():
         print('matching',family,flush=True)
@@ -82,99 +71,52 @@ def run(db,args,chosen,direct,possible,graphs,subjects,anchors,ranks):
                 'cid_a:=cid','cid_a:=l.cid').replace('uid_a:=uid','uid_a:=l.uid').replace('window_a:=w','window_a:=l.w').replace('port_a_eid:=eid','port_a_eid:=l.eid')).fetchall():
             record(h,a,b,family+':'+layout,wit,(w,min(c,d),max(c,d),() if ex<0 else (ex,)),ori)
 
-    # Shortest native chains between concrete subject anchors. One resource crossing
-    # consists of two real accesses. Intermediate subjects/resources cannot repeat.
-    edge_table={}
-    candidate_sids=list(donor)
-    candidate_nodes={u for u,s in subjects.items() if s in donor}
-    plans=defaultdict(list)
-    for w,(graph,ids,ix) in graphs.items():
-        endpoints=[(ix[u],u) for u in candidate_nodes.intersection(ix)]
-        if len(endpoints)<2:continue
-        endpoints.sort()
-        indices=[j for j,_ in endpoints]
-        dist=graph.distances(source=indices,target=indices)
-        for i,(_,u) in enumerate(endpoints):
-            for j in range(i+1,len(endpoints)):
-                if dist[i][j]==float('inf'):continue
-                v=endpoints[j][1]
-                plans[w].append((u,v))
-    print('anchor pairs',sum(map(len,plans.values())),flush=True)
-    # Preload only edges of retained shortest paths, one source window at a time.
-    for w,pairs in plans.items():
-        graph,ids,ix=graphs[w]
-        needed={}
-        lookup={}
-        for u,v in pairs:
-            options=[]
-            for (h,a,ra),da in donor[subjects[u]].items():
-                for (hh,b,rb),dbb in donor[subjects[v]].items():
-                    if h!=hh:continue
-                    # For identical types, require distinct donor groups somewhere.
-                    if a==b and da[0]==dbb[0]:
-                        alt=next((d for d in donor_alt[subjects[v],h,b,rb].values() if d[0]!=da[0]),None)
-                        if alt is None:
-                            alt=next((d for d in donor_alt[subjects[u],h,a,ra].values() if d[0]!=dbb[0]),None)
-                            if alt is None:continue
-                            options.append((h,a,b,ra,rb,alt,dbb));continue
-                        options.append((h,a,b,ra,rb,da,alt));continue
-                    options.append((h,a,b,ra,rb,da,dbb))
-            if not options:continue
-            paths={tuple(ids[i] for i in path) for path in graph.get_all_shortest_paths(ix[u],to=ix[v])}
-            lookup[u,v]=(options,paths)
-            for path in paths:
-                for x,y in zip(path,path[1:]):needed[tuple(sorted((x,y)))]=[]
-        if not needed:continue
-        # The indexed window and native event IDs identify every original tensor row.
-        lo=w<<32; hi=(w+1)<<32
-        sql="""select r.uid,-1-r.resource,e.eid,e.ts,e.op,e.direction,e.uid,
-            n.kind,n.native_nid from g.resource_events r join t.actor e using(eid)
-            join g.nodes n on n.nid=r.resource where r.segment=?
-            union all select f.src_uid,f.dst_uid,f.eid,f.ts,f.op,'actor_to_object',f.src_uid,
-            'subject',f.ch from forks f where f.w=?"""
-        for x,y,e,ts,op,d,owner,kind,nid in db.execute(sql,[w,w]).fetchall():
-            k=tuple(sorted((x,y)))
-            if k in needed:needed[k].append((e,ts,op,d,owner,kind,nid))
-        programs=dict(db.execute('select uid,program from g.units where segment=?',[w]).fetchall())
-        for (u,v),(options,paths) in lookup.items():
-            for path in paths:
-                bundles=[sorted(needed[tuple(sorted(edge))]) for edge in zip(path,path[1:])]
-                assert all(bundles)
-                def describe(reverse):
-                    seq=path[::-1] if reverse else path
-                    bb=bundles[::-1] if reverse else bundles
-                    times=sorted({ev[1] for grp in bb for ev in grp})
-                    tick={ts:i for i,ts in enumerate(times)}
-                    nodes=[programs[x] if x>=0 else bb[i-1][0][5] for i,x in enumerate(seq)]
-                    links=[sorted((op,d,owner==seq[i],tick[ts]) for e,ts,op,d,owner,kind,nid in grp)
-                           for i,grp in enumerate(bb)]
-                    left=min(ev[1] for ev in bb[0]);right=min(ev[1] for ev in bb[-1])
-                    direction='A_to_B' if left<right else 'B_to_A' if left>right else 'simultaneous'
-                    return [nodes,links],direction
-                layouts={rev:describe(rev) for rev in (False,True)}
-                for h,a,b,ra,rb,da,dbb in options:
-                    rev=a>b or (a==b and u>v)
-                    aa,bb=(b,a) if rev else (a,b)
-                    shape,ori=layouts[rev]
-                    roles=[rb,ra] if rev else [ra,rb]
-                    # Direct native fork is already covered by the fork query.
-                    if len(path)==2:continue
-                    layout='native_chain:'+dumped([roles,shape])
-                    d1,d2=(dbb,da) if rev else (da,dbb)
-                    wits={'window':w,'path':path[::-1] if rev else path,
-                          'donor_a':d1,'donor_b':d2,
-                          'events':[[ev[0] for ev in group] for group in (bundles[::-1] if rev else bundles)]}
-                    record(h,aa,bb,layout,wits,orientation=ori)
-                    # A given native subject may belong to multiple certified subgraphs
-                    # as a non-owner port. Iterate all such placements below.
-                    for ca in actual_all.get((w,subjects[u],h,a,ra),()):
-                        for cb in actual_all.get((w,subjects[v],h,b,rb),()):
-                            if ca==cb:continue
-                            if any(owners.get((h,x)) in (ca,cb) for x in path[1:-1] if x>=0):continue
-                            extra=tuple(sorted(ev[0] for group in bundles for ev in group if owners.get((h,ev[4])) not in (ca,cb)))
-                            joint=(w,min(ca,cb),max(ca,cb),extra)
-                            wit=dict(wits,actual_cids=([cb,ca] if rev else [ca,cb]))
-                            record(h,aa,bb,layout,wit,joint,ori)
+    programs=dict(db.execute('select uid,program from g.units').fetchall())
+    # Materialize only witnessed paths under the fixed terminal-port rule. Store full
+    # edge bundles once per window; every row points back to the original eid.
+    for w,records in itertools.groupby(search.paths(chosen,direct),key=lambda item:item[0]):
+        edge=defaultdict(list)
+        for x,y,e,ts,op,d,owner,kind in db.execute("""select r.uid,-1-r.resource,e.eid,e.ts,e.op,e.direction,e.uid,n.kind
+            from g.resource_events r join t.actor e using(eid) join g.nodes n on n.nid=r.resource
+            where r.segment=? and e.eid>=? and e.eid<? union all
+            select src_uid,dst_uid,eid,ts,op,'actor_to_object',src_uid,'subject' from forks where w=?""",
+            [w,w<<32,(w+1)<<32,w]).fetchall():
+            edge[min(x,y),max(x,y)].append((e,ts,op,d,owner,kind))
+        for _,path,options in records:
+            bundles=[edge[min(a,b),max(a,b)] for a,b in zip(path,path[1:])]
+            assert all(bundles)
+            times=sorted({ev[1] for gr in bundles for ev in gr})
+            tick={ts:i for i,ts in enumerate(times)}
+            layouts={}
+            for reverse in {rev for _,rev,_,_ in options}:
+                seq=path[::-1] if reverse else path
+                bs=bundles[::-1] if reverse else bundles
+                nodes=[programs[x] if x>=0 else bs[i-1][0][5] for i,x in enumerate(seq)]
+                links=[sorted((op,d,owner==seq[i],tick[ts]) for e,ts,op,d,owner,kind in gr)
+                        for i,gr in enumerate(bs)]
+                l=min(ev[1] for ev in bs[0]);r=min(ev[1] for ev in bs[-1])
+                ori='A_to_B' if l<r else 'B_to_A' if l>r else 'simultaneous'
+                layouts[reverse]=('native_chain:'+dumped([nodes,links]),ori)
+            for (h,a,b),rev,da,dbu in options:
+                ca,ta=members[h,da];cb,tb=members[h,dbu]
+                u,v=path[0],path[-1]
+                acta=members.get((h,u));actb=members.get((h,v))
+                if ca==cb:
+                    if acta and actb and acta[1]==ta and actb[1]==tb and acta[0]!=actb[0]:
+                        ca,cb=acta[0],actb[0];da,dbu=u,v
+                    else:continue
+                shape,ori=layouts[rev]
+                wit=dict(window=w,path=path[::-1] if rev else path,
+                    donor_cids=[cb,ca] if rev else [ca,cb],donor_uids=[dbu,da] if rev else [da,dbu],
+                    event_bundles=[[ev[0] for ev in gr] for gr in (bundles[::-1] if rev else bundles)])
+                joint=None
+                if acta and actb and acta[1]==ta and actb[1]==tb and acta[0]!=actb[0]:
+                    ac,bc=acta[0],actb[0]
+                    if not any(allcid[h,x] in (ac,bc) for x in path[1:-1] if x>=0):
+                        extra=tuple(sorted(ev[0] for gr in bundles for ev in gr if allcid[h,ev[4]] not in (ac,bc)))
+                        joint=(w,min(ac,bc),max(ac,bc),extra)
+                        wit['actual_cids']=[bc,ac] if rev else [ac,bc]
+                record(h,a,b,shape,wit,joint,ori)
     write_results(db,args,chosen,ranks,schemas,instances,orient_instances)
 
 
