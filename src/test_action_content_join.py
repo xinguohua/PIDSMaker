@@ -6,6 +6,8 @@ from tempfile import TemporaryDirectory
 from action_paths import pack, paths
 from action_path_check import check_real_window
 import action_window as window
+from action_index import ActionIndex
+from unittest.mock import patch
 
 
 class ContentJoinTest(unittest.TestCase):
@@ -31,11 +33,15 @@ class ContentJoinTest(unittest.TestCase):
                              {1,2},root/'counts.sqlite',(paths,check_real_window,pack))
             window.initialize()
             try:
-                audit, rows, flags, _ = window.compute_one((1,'test'),tmp)
+                with patch.object(ActionIndex, 'witness', side_effect=AssertionError('eager witness')):
+                    audit, rows, flags, _ = window.compute_one((1,'test'),tmp)
+                groups, _, _, _ = window.read_window(
+                    window._connection, 1, True, attrs, keys, dict.fromkeys(attrs), set())
+                self.assertEqual(ActionIndex(groups).witness((1,2)), (1,3))
             finally:
                 window._connection.close()
                 window._support.close()
-            pairs = [(b,n) for k,b,_,n,_,_ in window.result_rows(rows) if k==2]
+            pairs = [(b,n) for k,b,_,n,_ in window.result_rows(rows) if k==2]
             self.assertEqual(pairs, [(pack((1,2)), '1')])
             self.assertEqual(audit['instances_2'],1)
             self.assertEqual(set(flags),{(2,n) for n in (92,84,7)})
@@ -70,7 +76,7 @@ class ContentJoinTest(unittest.TestCase):
                 self.assertEqual(audit['instances_2'],1)
                 self.assertEqual(audit['semantic_unknown_instances_1'],2)
                 self.assertEqual(flags,{(2,n):1 for n in (1,2,4)})
-                self.assertEqual([n for k,_,_,n,_,_ in values if k==2],['1'])
+                self.assertEqual([n for k,_,_,n,_ in values if k==2],['1'])
                 audit,rows,flags,_=window.compute_one((2,'test'),tmp)
                 list(window.result_rows(rows))
                 self.assertEqual(audit['instances_2'],0)

@@ -60,15 +60,9 @@ def independent_instance_counts(edges):
     return result
 
 
-def compute_one(job, spool_dir):
-    w, split = job
-    ctx = _context
-    paths, check, pack = ctx['functions']
-    begin = time.monotonic()
-    test = split == 'test'
-    edges = _connection.execute('''select e.row,e.u,e.v,e.ns,e.op,e.uuid,e.y,r.seq
+def read_window(db, w, test, attrs, keys, pred, attack):
+    edges = db.execute('''select e.row,e.u,e.v,e.ns,e.op,e.uuid,e.y,r.seq
         from edges e join sem.source r using(w,row) where e.w=? order by e.ns,r.seq''', (w,))
-    good = []
     endpoints = {}
     uuids = set()
     previous_order = None
@@ -77,20 +71,30 @@ def compute_one(job, spool_dir):
     for row, u, v, ns, op, uuid, label, seq in edges:
         assert uuid not in uuids, (w, row, 'duplicate event')
         uuids.add(uuid)
-        if label or test and (u in ctx['attack'] or v in ctx['attack']):
+        if label or test and (u in attack or v in attack):
             excluded['attack'] += 1
-        elif test and (u not in ctx['pred'] or v not in ctx['pred']):
+        elif test and (u not in pred or v not in pred):
             excluded['unknown'] += 1
         else:
-            action = ctx['keys'][ctx['attrs'][u][0], op, ctx['attrs'][v][0]]
+            action = keys[attrs[u][0], op, attrs[v][0]]
             edge=(row,u,v,action)
             endpoints[row]=(u,v)
-            good.append(edge)
             if previous_order != (ns,seq):
                 ordered_groups.append([])
                 previous_order=(ns,seq)
             ordered_groups[-1].append(edge)
-    assert len(uuids) == _connection.execute('select count(*) from edges where w=?',(w,)).fetchone()[0], 'missing/duplicate source evidence'
+    assert len(uuids) == db.execute('select count(*) from edges where w=?',(w,)).fetchone()[0], 'missing/duplicate source evidence'
+    return ordered_groups, endpoints, len(uuids), excluded
+
+
+def compute_one(job, spool_dir):
+    w, split = job
+    ctx = _context
+    paths, check, pack = ctx['functions']
+    begin = time.monotonic()
+    test = split == 'test'
+    ordered_groups, endpoints, native_count, excluded = read_window(
+        _connection, w, test, ctx['attrs'], ctx['keys'], ctx['pred'], ctx['attack'])
     read = time.monotonic()
     lengths = LENGTHS
     real = check([group[0] for group in ordered_groups], lengths, paths, endpoints) if w == 0 else None
@@ -100,9 +104,9 @@ def compute_one(job, spool_dir):
     indexed = time.monotonic()
     exact_total = independent_instance_counts(ordered_groups)
     oracle_done = time.monotonic()
-    audit = dict(window=w, split=split, native_edges=len(uuids), normal_edges=len(good),
+    audit = dict(window=w, split=split, native_edges=native_count, normal_edges=len(endpoints),
                  attack_edges=excluded['attack'], unknown_label_edges=excluded['unknown'])
-    audit['same_order_extra_events'] = len(good)-len(ordered_groups)
+    audit['same_order_extra_events'] = len(endpoints)-len(ordered_groups)
     flags = {}
     spool_path = Path(spool_dir) / f'{w}.bin'
     rows = []
@@ -139,7 +143,7 @@ def compute_one(job, spool_dir):
                         participation.add(index, seq, bit)
                         membership_s += time.monotonic()-tick
                     rows.append((k, blob, '0' if test else str(n), str(n) if test else '0',
-                                 w, pack(index.witness(seq))))
+                                 w))
                 tick = time.monotonic()
                 pickle.dump(rows, spool, protocol=5)
                 rows.clear()

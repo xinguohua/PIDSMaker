@@ -93,10 +93,10 @@ class PersistenceTest(unittest.TestCase):
         from action_paths import commit_window, pack
         db=sqlite3.connect(':memory:')
         db.create_function('bigadd',2,lambda a,b:str(int(a)+int(b)))
-        db.executescript('''create table counts(k,seq,train text,test text,w,witness,primary key(k,seq));
+        db.executescript('''create table counts(k,seq,train text,test text,w,primary key(k,seq));
             create table node_flags(k,id,bits,primary key(k,id));
             create table window_done(w primary key,audit);''')
-        row=(4,pack((1,)*4),str(10**40),'0',1,pack(range(4)))
+        row=(4,pack((1,)*4),str(10**40),'0',1)
         def interrupted():
             yield row
             raise RuntimeError('simulated interrupted stream')

@@ -4,7 +4,7 @@ from pathlib import Path
 from collections import Counter,defaultdict
 from action_composition import dump,write,ro,sha
 from action_path_check import check_real_window
-from action_window import configure,window_results,result_rows
+from action_window import configure,window_results,result_rows,read_window
 from action_index import ActionIndex, signature, PROTOCOL, LENGTHS
 
 def paths(edges, memberships=False, groups=None, endpoints=None):
@@ -57,7 +57,7 @@ def commit_window(counts, audit, rows, flags):
   counts.execute('begin immediate')
   if counts.execute('select 1 from window_done where w=?',(audit['window'],)).fetchone():
    return False
-  counts.executemany(f"""insert into counts values(?,?,?,?,?,?) on conflict(k,seq)
+  counts.executemany(f"""insert into counts values(?,?,?,?,?) on conflict(k,seq)
       do update set {column}=bigadd({column},excluded.{column})""",rows)
   counts.executemany("""insert into node_flags values(?,?,?) on conflict(k,id)
       do update set bits=bits|excluded.bits""",((k,n,b) for (k,n),b in flags.items()))
@@ -140,7 +140,7 @@ def analyze(a):
  for name in ('COMPOSITION_COUNTS','ACTION_DISTRIBUTIONS'): (out/name).mkdir(exist_ok=True)
  counts.create_function('bigadd',2,lambda x,y:str(int(x)+int(y)))
  counts.executescript("""pragma journal_mode=wal; pragma synchronous=normal; pragma cache_size=-65536; pragma wal_autocheckpoint=4096;
-  create table if not exists counts(k integer,seq blob,train text,test text,w integer,witness blob,primary key(k,seq)) without rowid;
+  create table if not exists counts(k integer,seq blob,train text,test text,w integer,primary key(k,seq)) without rowid;
   create table if not exists window_done(w integer primary key,audit text);
   create table if not exists node_flags(k integer,id integer,bits integer,primary key(k,id)) without rowid;""")
  flags={k:defaultdict(int) for k in LENGTHS[1:]}
@@ -185,11 +185,11 @@ def analyze(a):
  for k in LENGTHS:
   train_instances=sum(r['instances_'+str(k)] for r in audits if r['split']=='train');test_instances=sum(r['instances_'+str(k)] for r in audits if r['split']=='test')
   if k==1:
-   union=[((t,),acount[0][t],acount[1][t],None,None) for t in actions if acount[0][t] or acount[1][t]]
+   union=[((t,),acount[0][t],acount[1][t],None) for t in actions if acount[0][t] or acount[1][t]]
    union.sort(key=lambda r:(-r[1],-r[2],r[0]))
   else:
-   union=((unpack(b),int(tr),int(te),w,unpack(wit)) for b,tr,te,w,wit in counts.execute(
-       """select seq,train,test,w,witness from counts where k=? order by length(train) desc,train desc,
+   union=((unpack(b),int(tr),int(te),w) for b,tr,te,w in counts.execute(
+       """select seq,train,test,w from counts where k=? order by length(train) desc,train desc,
           length(test) desc,test desc,seq""",(k,)))
    detail=(out/'COMPOSITION_COUNTS'/f'length_{k}.csv').open('w',newline='')
    detail_writer=csv.writer(detail)
@@ -197,7 +197,7 @@ def analyze(a):
   sum_train=sum_test=observable_zs=observable_out=observable_out_inst=0
   seen=zs=outside=outside_inst=unknown_types=unknown_test_inst=0;train_types=test_types=0
   all_dist=Counter();zs_dist=Counter();zsgroups=Counter();zstypes=Counter()
-  for rank,(seq,tr,te,w,wit) in enumerate(union,1):
+  for rank,(seq,tr,te,w) in enumerate(union,1):
    train_types+=tr>0;test_types+=te>0;complete=not any(t in missing_action for t in seq);atomic=all(t in all_train for t in seq)
    sum_train+=tr;sum_test+=te
    observable_zs+=int(not tr and te>0 and atomic)
@@ -218,11 +218,15 @@ def analyze(a):
      if k>1:zero_writer.writerow((k,json.dumps(seq),int(complete),g,te,json.dumps(support)))
    if k>1:detail_writer.writerow((rank,json.dumps(seq),tr,te,int(complete),kind,json.dumps(support)))
    if k>1 and te and not tr and complete and sum(x['length']==k and x['category']==kind for x in examples)<2:
-    # Stored witness may be training only for seen types; unseen types necessarily test.
+    # A test-only type's first contributing window is necessarily in the test split.
+    assert db.execute('select split from windows where w=?',(w,)).fetchone()==('test',)
+    groups,_,_,_=read_window(db,w,True,attrs,action_key,pred,attack)
+    wit=ActionIndex(groups).witness(seq)
     ev=[]
     for row in wit:
      q=db.execute('select e.*,r.seq,r.actor,r.obj,r.file,r.line,r.offset from edges e join sem.source r using(w,row) where e.w=? and e.row=?',(w,row)).fetchone()
      ev.append(dict(zip(['window','row','source_id','destination_id','timestamp_ns','operation','event_uuid','edge_label','sequence','actor_uuid','object_uuid','raw_file','raw_line','raw_offset'],q)))
+    assert tuple(action_key[attrs[e['source_id']][0],e['operation'],attrs[e['destination_id']][0]] for e in ev)==seq
     assert len({e['event_uuid'] for e in ev})==k
     assert all(x['destination_id']==y['source_id'] and (x['timestamp_ns'],x['sequence'])<(y['timestamp_ns'],y['sequence']) for x,y in zip(ev,ev[1:]))
     examples.append(dict(length=k,category=kind,actions=list(seq),action_train_frequencies=support,train_frequency=tr,test_frequency=te,events=ev,entity_semantics={str(n):json.loads(attrs[n][0]) for e in ev for n in (e['source_id'],e['destination_id'])}))
