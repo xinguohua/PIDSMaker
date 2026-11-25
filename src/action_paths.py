@@ -2,67 +2,24 @@
 import argparse,csv,hashlib,json,math,sqlite3,struct,subprocess,time
 from pathlib import Path
 from collections import Counter,defaultdict
-from action_composition import dump,write,ro
+from action_composition import dump,write,ro,sha
 from action_path_check import check_real_window
 from action_window import configure,window_results,result_rows
+from action_index import ActionIndex, signature, PROTOCOL
 LENGTHS=(1,2,3,5)
 
 def paths(edges, memberships=False, groups=None, endpoints=None):
- """Combine identical typed prefixes at their terminal content signature.
-
- Update lengths in descending order for every group of indistinguishable
- timestamps and source sequence numbers. No event in that group can extend
- another event of the same group.
- """
- states=[None]+[defaultdict(dict) for _ in range(4)]
- totals={k:{} for k in LENGTHS}
- batches=groups if groups is not None else [(edge,) for edge in edges]
- if not isinstance(batches,(list,tuple)):batches=list(batches)
- # A length-four prefix is only useful if a later edge can complete length five.
- # Find the last group where each node starts a chain of one or two future edges.
- last_out={}
- last_two={}
- for i in range(len(batches)-1,-1,-1):
-  for _,u,v,_ in batches[i]:
-   if last_out.get(v,-1)>i:last_two.setdefault(u,i)
-  for _,u,_,_ in batches[i]:last_out.setdefault(u,i)
-
- for i,batch in enumerate(batches):
-  for k in (5,4,3,2,1):
-   for eid,u,v,typ in batch:
-    future=last_two if k==3 else last_out
-    keep=k<5 and future.get(v,-1)>i
-    if k==4 and not keep:continue
-    actual=endpoints[eid] if endpoints is not None and memberships else (u,v)
-    previous=[((),(1,(),set() if memberships else None))] if k==1 else states[k-1].get(u,{}).items()
-    prefix_table=states[k][v] if keep else None
-    total_table=totals.get(k)
-    if prefix_table is None:
-     targets=(total_table,)
-    elif total_table is None:
-     targets=(prefix_table,)
-    else:
-     targets=(prefix_table,total_table)
-    for prefix,(n,w,ns) in previous:
-     seq=prefix+(typ,)
-     for table in targets:
-      old=table.get(seq)
-      if old is None:
-       table[seq]=[n,w+(eid,),ns.union(actual) if memberships else None]
-      else:
-       old[0]+=n
-       if memberships:
-        old[2].update(ns)
-        old[2].update(actual)
-  for _,u,_,_ in batch:
-   if last_out[u]==i:
-    for table in states[1:]:table.pop(u,None)
- return totals
+ # Materialization is only for bounded reference checks, never production windows.
+ batches=groups if groups is not None else [(e,) for e in edges]
+ index=ActionIndex(batches)
+ actual=endpoints if endpoints is not None else {e[0]:e[1:3] for batch in batches for e in batch}
+ return {k:{seq:[n,index.witness(seq),index.nodes(seq,actual) if memberships else None]
+            for seq,n in index.sequences(k)} for k in LENGTHS}
 
 def selfcheck():
  # Exhaustive independent event-ID enumeration: loops, repeated types, shared events,
  # separated instances of the same semantic type, and diverging prefixes.
- es=[(0,1,1,7),(1,1,2,7),(2,2,1,8),(3,1,2,7),(4,2,3,9),(5,3,1,8)]
+ es=[(0,1,1,6),(1,1,2,7),(2,2,1,8),(3,1,2,7),(4,2,3,9),(5,3,1,10)]
  got=paths(es,True);expected={k:defaultdict(lambda:[0,set()]) for k in LENGTHS}
  def visit(ids,ns,types,start):
   if len(ids) in expected:
@@ -92,22 +49,62 @@ def selfcheck():
 def pack(seq):return struct.pack('<'+'I'*len(seq),*seq)
 def unpack(b):return struct.unpack('<'+'I'*(len(b)//4),b)
 
+def commit_window(counts, audit, rows, flags):
+ """All rows, node bits and completion marker are one transaction, replay is a no-op."""
+ column=audit['split']
+ if column not in ('train','test'):raise ValueError(column)
+ start=time.monotonic()
+ with counts:
+  counts.execute('begin immediate')
+  if counts.execute('select 1 from window_done where w=?',(audit['window'],)).fetchone():
+   return False
+  counts.executemany(f"""insert into counts values(?,?,?,?,?,?) on conflict(k,seq)
+      do update set {column}=bigadd({column},excluded.{column})""",rows)
+  counts.executemany("""insert into node_flags values(?,?,?) on conflict(k,id)
+      do update set bits=bits|excluded.bits""",((k,n,b) for (k,n),b in flags.items()))
+  audit['write_s']=round(time.monotonic()-start,6)
+  counts.execute('insert into window_done values(?,?)',(audit['window'],json.dumps(audit)))
+ return True
+
+
+def bind_protocol(counts, binding):
+ text=json.dumps(binding,sort_keys=True)
+ tables={r[0] for r in counts.execute("select name from sqlite_master where type='table'")}
+ if tables and 'protocol' not in tables:raise ValueError('Unbound/legacy counts database')
+ with counts:
+  counts.execute('create table if not exists protocol(binding text not null)')
+  existing=counts.execute('select binding from protocol').fetchall()
+  if existing and existing!=[(text,)]:raise ValueError('Protocol/input/code/mapping mismatch')
+  if not existing:counts.execute('insert into protocol values(?)',(text,))
+
+
+def candidate_space(actions, selected, complete_endpoints):
+ dp={t:1 for t in selected};result={1:len(dp)}
+ for k in range(2,6):
+  by=Counter()
+  for t,n in dp.items():
+   if actions[t][2] in complete_endpoints:by[actions[t][2]]+=n
+  dp={t:by[actions[t][0]] for t in selected}
+  result[k]=sum(dp.values())
+ return result
+
+
+def node_category(bits):
+ return 'Zero-shot' if bits&2 else 'Seen' if bits==1 else 'Other'
+
+
 def analyze(a):
- selfcheck();root=a.root;run=root/'content_join_v1';out=run/'results';out.mkdir(parents=True,exist_ok=True)
- (out/'MATCHING_RULES.md').write_text(
-  '# 内容连接的事件序列\n\n在同一原生窗口内，前一事件目标与后一事件来源的完整语义签名相同，且时间及序号严格递增，即计为一次内容连接。'
-  '缺少识别属性的端点无法作为连接依据。不同原生 ID 可以相接，每个见证保留全部事件及原生端点。'
-  '按有序事件行序列计实例，按有序 Action 签名计类型。节点检测分组使用实际参与事件的节点 ID。\n',encoding='utf-8')
- for name in ('COMPOSITION_COUNTS','ACTION_DISTRIBUTIONS'): (out/name).mkdir(exist_ok=True)
+ selfcheck();root=a.root;run=root/PROTOCOL;out=run/'results';out.mkdir(parents=True,exist_ok=True)
  db=ro(root/'native.sqlite')
+ assert dict(db.execute('select split,count(*) from windows group by split'))=={'train':581,'test':339}
+ assert dict(db.execute('select split,sum(n) from windows group by split'))=={'train':3426589,'test':2065670}
  db.execute('attach database ? as sem',('file:'+str(root/'semantic.sqlite')+'?mode=ro&immutable=1',))
  raw_audit=json.loads((root/'RAW_AUDIT.json').read_text());assert not raw_audit['mismatches']
- attrs={n:(s,c) for n,s,c in db.execute('select id,semantic,complete from sem.attributes')}
+ attrs={n:(signature(s),c) for n,s,c in db.execute('select id,semantic,complete from sem.attributes')}
  pred={n:(gt,p,score,thr) for n,gt,p,score,thr in db.execute('select id,gt,prediction,score,threshold from pred')}
  # Known attack identities include all GT UUIDs, including nodes outside scored universe.
  attack={n for n,(gt,*_) in pred.items() if gt==1}
  gt_dir=a.cell.parents[1]/'code/Ground_Truth/orthrus'
- from xml.etree import ElementTree
  manifest=json.loads((a.cell/'manifest.json').read_text())
  uuid_to_id={u:n for n,u in db.execute('select id,uuid from nodes')}
  for rel in manifest['protocol']['ground_truth_relative_path']:
@@ -122,43 +119,54 @@ def analyze(a):
   if key not in action_key:
    t=len(action_key)+1;action_key[key]=t;actions[t]=key
    if not(sc and dc):missing_action.add(t)
+ binding=dict(protocol=PROTOCOL, schema=1, inputs={str(p):sha(p) for p in
+              (root/'native.sqlite',root/'semantic.sqlite',root/'RAW_AUDIT.json',a.cell/'manifest.json',a.cell/'metrics.json')},
+              code={name:sha(Path(__file__).with_name(name)) for name in
+                    ('action_paths.py','action_window.py','action_index.py','action_path_check.py','action_composition.py')},
+              ground_truth={rel:sha(gt_dir/rel) for rel in manifest['protocol']['ground_truth_relative_path']},
+              mapping=hashlib.sha256(json.dumps(sorted(actions.items()),ensure_ascii=False).encode()).hexdigest())
+ identity=run/'PROTOCOL.json'
+ if identity.exists() and json.loads(identity.read_text())!=binding:
+  raise ValueError('Protocol/input/code/mapping mismatch; do not reuse counts')
  counts=sqlite3.connect(run/'counts.sqlite')
+ bind_protocol(counts,binding)
+ if not identity.exists():
+  pending=identity.with_suffix('.json.tmp')
+  dump(pending,binding)
+  pending.replace(identity)
+ (out/'MATCHING_RULES.md').write_text(
+  '# 原生图路径\n\n在同一原生窗口内，前一事件目标与后一事件来源的原生节点 ID 相同，且 (timestampNanos, CDM sequence) 二元组按字典序严格递增，即计为一次原生图连接。'
+  '不同原生 ID 即使内容相同也不能相接，每个见证保留全部事件及原生端点。'
+  '按有序事件行序列计实例，按有序 Action 签名计类型。节点检测分组使用实际参与事件的节点 ID。\n',encoding='utf-8')
+ for name in ('COMPOSITION_COUNTS','ACTION_DISTRIBUTIONS'): (out/name).mkdir(exist_ok=True)
  counts.create_function('bigadd',2,lambda x,y:str(int(x)+int(y)))
- counts.executescript("""pragma journal_mode=wal; pragma synchronous=normal; pragma cache_size=-1048576; pragma wal_autocheckpoint=262144;
+ counts.executescript("""pragma journal_mode=wal; pragma synchronous=normal; pragma cache_size=-65536; pragma wal_autocheckpoint=4096;
   create table if not exists counts(k integer,seq blob,train text,test text,w integer,witness blob,primary key(k,seq)) without rowid;
   create table if not exists window_done(w integer primary key,audit text);
   create table if not exists node_flags(k integer,id integer,bits integer,primary key(k,id)) without rowid;""")
  flags={k:defaultdict(int) for k in (2,3,5)}
- audits=[];all_train=set();all_train_sequences={k:set() for k in (2,3,5)}
+ audits=[];all_train=set()
  done={w for w, in counts.execute('select w from window_done')}
  for split in ('train','test'):
-  jobs=[(w,split) for w, in db.execute('select w from windows where split=? order by w',(split,)) if w not in done]
-  configure(root,attrs,action_key,pred,attack,missing_action,all_train,all_train_sequences,(paths,check_real_window,pack))
+  jobs=[(w,split) for w, in db.execute('select w from windows where split=? order by w',(split,)) if w not in done and (a.window is None or w==a.window)]
+  if split=='test' and jobs:
+   train_windows={w for w, in db.execute("select w from windows where split='train'")}
+   if not train_windows.issubset(done):raise ValueError('Test membership requires all frozen training windows under this protocol')
+  configure(root,attrs,action_key,pred,attack,missing_action,all_train,run/'counts.sqlite',(paths,check_real_window,pack))
   remaining=len(jobs)
-  # Counts are decimal TEXT because some paths exceed SQLite's integer range.
-  # The sum of two nonnegative 18-digit values fits a signed 64-bit integer.
-  column=split
-  merge_sql=f"""insert into counts values(?,?,?,?,?,?) on conflict(k,seq)
-      do update set {column}=case
-      when length({column})<=18 and length(excluded.{column})<=18
-      then {column}+excluded.{column} else bigadd({column},excluded.{column}) end"""
   for audit,rows,node_flags,real in window_results(jobs,a.workers):
-   w=audit['window'];start=time.monotonic()
+   w=audit['window']
+   commit_window(counts,audit,result_rows(rows),node_flags)
    if real:dump(out/'REAL_PATH_CHECK.json',dict(window=w,**real))
-   counts.executemany(merge_sql,result_rows(rows))
-   counts.executemany("""insert into node_flags values(?,?,?) on conflict(k,id)
-       do update set bits=bits|excluded.bits""", ((k,n,b) for (k,n),b in node_flags.items()))
-   audit['write_s']=round(time.monotonic()-start,4)
-   counts.execute('insert into window_done values(?,?)',(w,json.dumps(audit)))
    done.add(w);remaining-=1
-   if len(done)%12==0 or remaining==0 or sum(audit[f'types_{k}'] for k in LENGTHS)>200000:
-    counts.commit()
-    dump(run/'PROGRESS.json',dict(window=w,split=split,windows_done=len(done),last_window=audit))
-    print('committed windows',len(done),split,flush=True)
+   dump(run/'PROGRESS.json',dict(window=w,split=split,windows_done=len(done),last_window=audit))
+   print('committed windows',len(done),split,flush=True)
   if split=='train':
-   for k,b in counts.execute("select k,seq from counts where train!='0'"):
-    if k==1:all_train.add(unpack(b)[0])
-    else:all_train_sequences[k].add(b)
+   for b, in counts.execute("select seq from counts where k=1 and train!='0'"):
+    all_train.add(unpack(b)[0])
+ if a.window is not None:
+  print('SINGLE WINDOW ONLY; full delivery not generated',flush=True)
+  counts.close();db.close();return
  for b,tr,te in counts.execute('select seq,train,test from counts where k=1'):
   t=unpack(b)[0];acount[0][t]=int(tr);acount[1][t]=int(te)
  for k,n,b in counts.execute('select k,id,bits from node_flags'):flags[k][n]=b
@@ -167,20 +175,10 @@ def analyze(a):
  write(out/'WINDOW_AUDIT.csv',list(audits[0]),([r[k] for k in audits[0]] for r in audits))
  write(out/'ACTION_COUNTS.csv',['action_id','source_semantics','operation','destination_semantics','semantic_complete','train_frequency','test_frequency'],((t,*actions[t],int(t not in missing_action),acount[0][t],acount[1][t]) for t in sorted(actions,key=lambda t:(-acount[0][t],-acount[1][t],t)) if acount[0][t] or acount[1][t]))
  # Fully identified subspace is calculable without treating two unknown file paths as equal.
- known_train={t for t in all_train if t not in missing_action};dp={t:1 for t in known_train};candidate={1:len(dp)}
- for k in range(2,6):
-  by=Counter()
-  for t,n in dp.items():by[actions[t][2]]+=n
-  dp={t:by[actions[t][0]] for t in known_train}
-  candidate[k]=sum(dp.values())
+ known_train={t for t in all_train if t not in missing_action}
  complete_endpoints={s for s,complete in attrs.values() if complete}
- observable_dp={t:1 for t in all_train};observable_space={1:len(all_train)}
- for k in range(2,6):
-  by=Counter()
-  for t,n in observable_dp.items():
-   if actions[t][2] in complete_endpoints:by[actions[t][2]]+=n
-  observable_dp={t:by[actions[t][0]] for t in all_train}
-  observable_space[k]=sum(observable_dp.values())
+ candidate=candidate_space(actions,known_train,complete_endpoints)
+ observable_space=candidate_space(actions,all_train,{s for s,_ in attrs.values()})
  summary=[];corr=[];examples=[]
  zero_file=(out/'ZERO_SHOT_ANALYSIS.csv').open('w',newline='')
  zero_writer=csv.writer(zero_file)
@@ -227,7 +225,7 @@ def analyze(a):
      q=db.execute('select e.*,r.seq,r.actor,r.obj,r.file,r.line,r.offset from edges e join sem.source r using(w,row) where e.w=? and e.row=?',(w,row)).fetchone()
      ev.append(dict(zip(['window','row','source_id','destination_id','timestamp_ns','operation','event_uuid','edge_label','sequence','actor_uuid','object_uuid','raw_file','raw_line','raw_offset'],q)))
     assert len({e['event_uuid'] for e in ev})==k
-    assert all(attrs[x['destination_id']][1] and attrs[y['source_id']][1] and attrs[x['destination_id']][0]==attrs[y['source_id']][0] and (x['timestamp_ns'],x['sequence'])<(y['timestamp_ns'],y['sequence']) for x,y in zip(ev,ev[1:]))
+    assert all(x['destination_id']==y['source_id'] and (x['timestamp_ns'],x['sequence'])<(y['timestamp_ns'],y['sequence']) for x,y in zip(ev,ev[1:]))
     examples.append(dict(length=k,category=kind,actions=list(seq),action_train_frequencies=support,train_frequency=tr,test_frequency=te,events=ev,entity_semantics={str(n):json.loads(attrs[n][0]) for e in ev for n in (e['source_id'],e['destination_id'])}))
   assert (sum_train,sum_test)==(train_instances,test_instances)
   potential=candidate[k]-seen-zs;assert potential>=0
@@ -263,7 +261,7 @@ def analyze(a):
   for n,(gt,pr,score,thr) in pred.items():
    if gt:category='attack_context_unresolved'
    else:
-    f=flags[k].get(n,0);category='Zero-shot' if f&2 else 'Seen' if f==1 else 'Other'
+    f=flags[k].get(n,0);category=node_category(f)
     groups['All'].append((n,pr,score))
    groups[category].append((n,pr,score));node_rows.append((k,n,gt,pr,score,thr,category,flags[k].get(n,0)))
   for group in ('All','Seen','Zero-shot','Other','attack_context_unresolved'):
@@ -275,10 +273,10 @@ def analyze(a):
   baseline=json.loads((a.cell/'metrics.json').read_text());assert len(groups['All'])==baseline['FP']+baseline['TN'];assert sum(r[1] for r in groups['All'])==baseline['FP']
  write(out/'DETECTION_PERFORMANCE.csv',['length','group','nodes','TP','FP','TN','FN','FPR','FNR','status','score_min','score_median_lower','score_max'],performance)
  write(out/'NODE_SCORES.csv',['length','node_id','gt','prediction','score','threshold','group','membership_bits'],node_rows)
- dump(out/'ANALYSIS_AUDIT.json',dict(join_rule="equal_complete_endpoint_content",exact_dp=True,sampling=False,path_lengths=LENGTHS,no_duplicate_event_per_path=True,order='raw timestampNanos, raw sequence',windows=len(audits),semantic_unknown_actions=len(missing_action),candidate_scope='fully identified semantic endpoints only',baseline_matched=True,known_attack_nodes=len(attack),source=str(root/'native.sqlite')))
+ dump(out/'ANALYSIS_AUDIT.json',dict(join_rule="same_native_node_id",exact_dp=True,sampling=False,path_lengths=LENGTHS,no_duplicate_event_per_path=True,order='raw timestampNanos, raw sequence',windows=len(audits),semantic_unknown_actions=len(missing_action),candidate_scope='fully identified semantic endpoints only',baseline_matched=True,known_attack_nodes=len(attack),source=str(root/'native.sqlite')))
  print('COMPLETE observable statistics; see semantic completeness limitation',flush=True)
 
 if __name__=='__main__':
- p=argparse.ArgumentParser();p.add_argument('--self-check',action='store_true');p.add_argument('--root',type=Path);p.add_argument('--cell',type=Path);p.add_argument('--workers',type=int,default=4);a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--self-check',action='store_true');p.add_argument('--root',type=Path);p.add_argument('--cell',type=Path);p.add_argument('--workers',type=int,default=4);p.add_argument('--window',type=int);a=p.parse_args()
  if a.self_check:selfcheck()
  else:analyze(a)
