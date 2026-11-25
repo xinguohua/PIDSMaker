@@ -16,25 +16,46 @@ def paths(edges, memberships=False, groups=None):
  """
  states=[None]+[defaultdict(dict) for _ in range(4)]
  totals={k:{} for k in LENGTHS}
- batches=groups if groups is not None else ((edge,) for edge in edges)
- for batch in batches:
+ batches=groups if groups is not None else [(edge,) for edge in edges]
+ if not isinstance(batches,(list,tuple)):batches=list(batches)
+ # A length-four prefix is only useful if a later edge can complete length five.
+ # Find the last group where each node starts a chain of one or two future edges.
+ last_out={}
+ last_two={}
+ for i in range(len(batches)-1,-1,-1):
+  for _,u,v,_ in batches[i]:
+   if last_out.get(v,-1)>i:last_two.setdefault(u,i)
+  for _,u,_,_ in batches[i]:last_out.setdefault(u,i)
+
+ for i,batch in enumerate(batches):
   for k in (5,4,3,2,1):
    for eid,u,v,typ in batch:
+    future=last_two if k==3 else last_out
+    keep=k<5 and future.get(v,-1)>i
+    if k==4 and not keep:continue
     previous=[((),(1,(),{u} if memberships else None))] if k==1 else states[k-1].get(u,{}).items()
+    prefix_table=states[k][v] if keep else None
+    total_table=totals.get(k)
+    if prefix_table is None:
+     targets=(total_table,)
+    elif total_table is None:
+     targets=(prefix_table,)
+    else:
+     targets=(prefix_table,total_table)
     for prefix,(n,w,ns) in previous:
-     seq=prefix+(typ,);witness=w+(eid,);node_set=(ns|{v}) if memberships else None
-     if k<5:
-      dst=states[k][v]
-      if seq in dst:
-       old=dst[seq];old[0]+=n
-       if memberships:old[2].update(node_set)
-      else:dst[seq]=[n,witness,node_set]
-     if k in totals:
-      dst=totals[k]
-      if seq in dst:
-       old=dst[seq];old[0]+=n
-       if memberships:old[2].update(node_set)
-      else:dst[seq]=[n,witness,node_set.copy() if memberships else None]
+     seq=prefix+(typ,)
+     for table in targets:
+      old=table.get(seq)
+      if old is None:
+       table[seq]=[n,w+(eid,),ns|{v} if memberships else None]
+      else:
+       old[0]+=n
+       if memberships:
+        old[2].update(ns)
+        old[2].add(v)
+  for _,u,_,_ in batch:
+   if last_out[u]==i:
+    for table in states[1:]:table.pop(u,None)
  return totals
 
 def selfcheck():
