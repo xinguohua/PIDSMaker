@@ -3,6 +3,7 @@ import argparse,csv,hashlib,json,math,sqlite3,struct,subprocess,time
 from pathlib import Path
 from collections import Counter,defaultdict
 from action_composition import dump,write,ro
+from action_path_check import check_real_window
 LENGTHS=(1,2,3,5)
 
 def paths(edges, memberships=False):
@@ -84,7 +85,7 @@ def analyze(a):
      if token in uuid_to_id:attack.add(uuid_to_id[token])
  action_key={};actions={};acount=[Counter(),Counter()];missing_action=set()
  # Freeze one semantic representation per entity for identical train/test matching.
- for u,v,op in db.execute('select distinct u,v,op from edges'):
+ for u,v,op in db.execute('select distinct u,v,op from edges order by u,v,op'):
   sk,sc=attrs[u];dk,dc=attrs[v];key=(sk,op,dk)
   if key not in action_key:
    t=len(action_key)+1;action_key[key]=t;actions[t]=key
@@ -107,6 +108,10 @@ def analyze(a):
    labels[row]=status;metadata[row]=(u,v,t)
    if status!='normal':excluded[status]+=1;continue
    good.append((row,u,v,t));acount[si][t]+=1
+  if w==0:
+   checked=check_real_window(good,LENGTHS,paths)
+   if checked is None:raise ValueError('First normal training window has no real validation chain')
+   dump(out/'REAL_PATH_CHECK.json',dict(window=w,**checked))
   totals=paths(good,si==1)
   audit=dict(window=w,split=split,native_edges=len(edge_rows),normal_edges=len(good),attack_edges=excluded['attack'],unknown_label_edges=excluded['unknown_label'])
   for k in LENGTHS:
@@ -136,6 +141,12 @@ def analyze(a):
   for t,n in dp.items():by[actions[t][2]]+=n
   dp={t:by[actions[t][0]] for t in known_train}
   candidate[k]=sum(dp.values())
+ observable_dp={t:1 for t in all_train};observable_space={1:len(all_train)}
+ for k in range(2,6):
+  by=Counter()
+  for t,n in observable_dp.items():by[actions[t][2]]+=n
+  observable_dp={t:by[actions[t][0]] for t in all_train}
+  observable_space[k]=sum(observable_dp.values())
  summary=[];zero=[];corr=[];examples=[]
  for k in LENGTHS:
   train_instances=sum(r['instances_'+str(k)] for r in audits if r['split']=='train');test_instances=sum(r['instances_'+str(k)] for r in audits if r['split']=='test')
@@ -174,6 +185,12 @@ def analyze(a):
   assert sum(r[1] for r in union)==train_instances and sum(r[2] for r in union)==test_instances
   potential=candidate[k]-seen-zs;assert potential>=0
   summary.append((k,train_instances,train_types,test_instances,test_types,candidate[k],seen,zs,potential,seen/candidate[k] if candidate[k] else 'NA',outside,outside_inst,unknown_types,unknown_test_inst,'fully_identified_action_subspace; full_semantic_result_incomplete' if missing_action else 'complete'))
+  observable_zs=sum(tr==0 and te>0 and all(t in all_train for t in seq) for seq,tr,te,w,wit in union)
+  observable_out=sum(te>0 and any(t not in all_train for t in seq) for seq,tr,te,w,wit in union)
+  observable_out_inst=sum(te for seq,tr,te,w,wit in union if any(t not in all_train for t in seq))
+  assert observable_space[k]>=train_types+observable_zs
+  summary[-1]+= (observable_space[k],train_types,observable_zs,observable_space[k]-train_types-observable_zs,
+                 train_types/observable_space[k] if observable_space[k] else 'NA',observable_out,observable_out_inst)
   if k==1:continue
   write(out/'COMPOSITION_COUNTS'/f'length_{k}.csv',['training_rank','action_ids','train_frequency','test_frequency','semantic_complete','observed_class','action_train_frequencies'],records)
   total_all=sum(all_dist.values());total_zs=sum(zs_dist.values());assert total_all==k*test_instances
@@ -191,7 +208,7 @@ def analyze(a):
     else:r=sum((v-mx)*(z-my) for v,z in zip(x,y))/math.sqrt(xx*yy)
    corr.append((k,scope,len(sel),total_all,total_zs,r,status))
   write(out/'ACTION_DISTRIBUTIONS'/f'length_{k}_zero_shot_groups.csv',['group','types','instances','type_fraction','instance_fraction'],((g,zstypes[g],zsgroups[g],zstypes[g]/sum(zstypes.values()) if zstypes else 'NA',zsgroups[g]/sum(zsgroups.values()) if zsgroups else 'NA') for g in ('all_actions_seen','unseen_action')))
- write(out/'COMPOSITION_SUMMARY.csv',['length','train_instances','train_observed_types','test_instances','test_observed_types','candidate_known_semantics','Seen_known_semantics','Zero_shot_known_semantics','Potential_known_semantics','training_coverage_known_semantics','test_unseen_action_known_types','test_unseen_action_known_instances','semantic_unknown_observed_types','semantic_unknown_test_instances','status'],summary)
+ write(out/'COMPOSITION_SUMMARY.csv',['length','train_instances','train_observed_types','test_instances','test_observed_types','candidate_known_semantics','Seen_known_semantics','Zero_shot_known_semantics','Potential_known_semantics','training_coverage_known_semantics','test_unseen_action_known_types','test_unseen_action_known_instances','semantic_unknown_observed_types','semantic_unknown_test_instances','status','candidate_observable_signatures','Seen_observable_signatures','Zero_shot_observable_signatures','Potential_observable_signatures','coverage_observable_signatures','test_unseen_action_observable_types','test_unseen_action_observable_instances'],summary)
  write(out/'ZERO_SHOT_ANALYSIS.csv',['length','action_ids','semantic_complete','group','test_instances','action_train_frequencies'],zero)
  write(out/'ACTION_DISTRIBUTIONS'/'CORRELATIONS.csv',['length','range','categories','All_denominator','Zero_shot_denominator','pearson','status'],corr)
  with (out/'EXAMPLES.jsonl').open('w') as f:
