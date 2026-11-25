@@ -4,13 +4,13 @@ from itertools import combinations
 
 
 def check_real_window(edges, expected_lengths, compute, endpoints=None):
-    # Pick a real length-five chain by endpoint content, without consulting type counts.
+    # Pick a real chain of the longest requested length by native endpoint identity, without consulting type counts.
     chains = {}
     for i, (_, u, v, _) in enumerate(edges):
         chain = chains.get(u, ()) + (i,)
         if len(chain) > len(chains.get(v, ())):
             chains[v] = chain
-        if len(chain) == 5:
+        if len(chain) == max(expected_lengths):
             break
     else:
         return None
@@ -35,5 +35,5 @@ def check_real_window(edges, expected_lengths, compute, endpoints=None):
         assert {s: result[0] for s, result in observed[k].items()} == counts
         assert {s: result[2] for s, result in observed[k].items()} == members
         witness_counts[k] = sum(counts.values())
-    return dict(event_rows=[e[0] for e in events], length_five_event_rows=[edges[i][0] for i in chain],
+    return dict(event_rows=[e[0] for e in events], longest_path_event_rows=[edges[i][0] for i in chain],
                 exact_instances=witness_counts, all_counts_and_node_memberships_equal=True)

@@ -4,8 +4,8 @@ from collections import defaultdict
 import json
 import time
 
-LENGTHS = (1, 2, 3, 5)
-PROTOCOL = 'native_paths_v3'
+LENGTHS = (1, 2, 3, 4)
+PROTOCOL = 'native_paths_len4_v1'
 
 
 def signature(value):
@@ -78,7 +78,7 @@ class ActionIndex:
 
     def sequences(self, length, progress=None):
         if length not in LENGTHS:
-            raise ValueError("length four is internal only")
+            raise ValueError("unsupported path length")
         last_report = time.monotonic()
         def walk(seq, frontier):
             # frontier[node][group] counts paths ending on that exact native node.

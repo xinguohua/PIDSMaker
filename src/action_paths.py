@@ -5,8 +5,7 @@ from collections import Counter,defaultdict
 from action_composition import dump,write,ro,sha
 from action_path_check import check_real_window
 from action_window import configure,window_results,result_rows
-from action_index import ActionIndex, signature, PROTOCOL
-LENGTHS=(1,2,3,5)
+from action_index import ActionIndex, signature, PROTOCOL, LENGTHS
 
 def paths(edges, memberships=False, groups=None, endpoints=None):
  # Materialization is only for bounded reference checks, never production windows.
@@ -24,7 +23,7 @@ def selfcheck():
  def visit(ids,ns,types,start):
   if len(ids) in expected:
    r=expected[len(ids)][tuple(types)];r[0]+=1;r[1].update(ns)
-  if len(ids)==5:return
+  if len(ids)==max(LENGTHS):return
   for i in range(start,len(es)):
    e,u,v,t=es[i]
    if ids and u!=ns[-1]:continue
@@ -35,7 +34,7 @@ def selfcheck():
   for seq,(n,w,ns) in got[k].items():assert (n,ns)==tuple(expected[k][seq]) and len(set(w))==k
  # Sparse semantic DP equals explicit adjacency walk enumeration, repetitions allowed.
  actions={1:('a','b'),2:('b','a'),3:('b','b')};n={t:1 for t in actions}
- for k in range(1,6):
+ for k in LENGTHS:
   if k>1:
    by=Counter()
    for t,v in n.items():by[actions[t][1]]+=v
@@ -80,7 +79,7 @@ def bind_protocol(counts, binding):
 
 def candidate_space(actions, selected, complete_endpoints):
  dp={t:1 for t in selected};result={1:len(dp)}
- for k in range(2,6):
+ for k in LENGTHS[1:]:
   by=Counter()
   for t,n in dp.items():
    if actions[t][2] in complete_endpoints:by[actions[t][2]]+=n
@@ -144,7 +143,7 @@ def analyze(a):
   create table if not exists counts(k integer,seq blob,train text,test text,w integer,witness blob,primary key(k,seq)) without rowid;
   create table if not exists window_done(w integer primary key,audit text);
   create table if not exists node_flags(k integer,id integer,bits integer,primary key(k,id)) without rowid;""")
- flags={k:defaultdict(int) for k in (2,3,5)}
+ flags={k:defaultdict(int) for k in LENGTHS[1:]}
  audits=[];all_train=set()
  done={w for w, in counts.execute('select w from window_done')}
  for split in ('train','test'):
@@ -256,7 +255,7 @@ def analyze(a):
  with (out/'EXAMPLES.jsonl').open('w') as f:
   for r in examples:f.write(json.dumps(r,ensure_ascii=False)+'\n')
  performance=[];node_rows=[]
- for k in (2,3,5):
+ for k in LENGTHS[1:]:
   groups=defaultdict(list)
   for n,(gt,pr,score,thr) in pred.items():
    if gt:category='attack_context_unresolved'

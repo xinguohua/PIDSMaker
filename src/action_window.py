@@ -4,7 +4,7 @@ import multiprocessing
 import pickle
 import resource
 import sys
-from action_index import ActionIndex, Participation
+from action_index import ActionIndex, Participation, LENGTHS
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import sqlite3
@@ -49,10 +49,10 @@ def rss_mb():
 
 
 def independent_instance_counts(edges):
-    prefixes = defaultdict(lambda: [0] * 5)
-    result = [0] * 5
+    prefixes = defaultdict(lambda: [0] * max(LENGTHS))
+    result = [0] * max(LENGTHS)
     for batch in edges:
-        for offset in range(4, -1, -1):
+        for offset in range(max(LENGTHS)-1, -1, -1):
             for _, u, v, _ in batch:
                 n = prefixes[u][offset-1] if offset else 1
                 prefixes[v][offset] += n
@@ -92,7 +92,7 @@ def compute_one(job, spool_dir):
             ordered_groups[-1].append(edge)
     assert len(uuids) == _connection.execute('select count(*) from edges where w=?',(w,)).fetchone()[0], 'missing/duplicate source evidence'
     read = time.monotonic()
-    lengths = (1, 2, 3, 5)
+    lengths = LENGTHS
     real = check([group[0] for group in ordered_groups], lengths, paths, endpoints) if w == 0 else None
     if w == 0 and real is None:
         raise ValueError('No reference chain in validation window')
