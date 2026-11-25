@@ -4,6 +4,7 @@ from pathlib import Path
 from collections import Counter,defaultdict
 from action_composition import dump,write,ro
 from action_path_check import check_real_window
+from action_window import configure,window_results
 LENGTHS=(1,2,3,5)
 
 def paths(edges, memberships=False):
@@ -90,48 +91,40 @@ def analyze(a):
   if key not in action_key:
    t=len(action_key)+1;action_key[key]=t;actions[t]=key
    if not(sc and dc):missing_action.add(t)
- counts=sqlite3.connect(root/'counts.sqlite');counts.create_function('bigadd',2,lambda x,y:str(int(x)+int(y)))
- counts.executescript('create table counts(k integer,seq blob,train text,test text,w integer,witness text,primary key(k,seq));')
+ counts=sqlite3.connect(root/'counts.sqlite')
+ counts.create_function('bigadd',2,lambda x,y:str(int(x)+int(y)))
+ counts.executescript("""pragma journal_mode=wal; pragma synchronous=normal; pragma cache_size=-262144;
+  create table if not exists counts(k integer,seq blob,train text,test text,w integer,witness blob,primary key(k,seq)) without rowid;
+  create table if not exists window_done(w integer primary key,audit text);
+  create table if not exists node_flags(k integer,id integer,bits integer,primary key(k,id)) without rowid;""")
  flags={k:defaultdict(int) for k in (2,3,5)}
  audits=[];all_train=set();all_train_sequences={k:set() for k in (2,3,5)}
- # Only one window is materialized. No high-degree caps or path sampling.
- for w,split,name,*_ in db.execute('select * from windows order by w'):
-  si=int(split=='test');edge_rows=list(db.execute('select e.row,e.u,e.v,e.ns,e.op,e.uuid,e.y,r.seq from edges e join raw_events r using(uuid) where w=? order by e.ns,r.seq',(w,)))
-  assert len({r[5] for r in edge_rows})==len(edge_rows),'duplicate event UUID within window'
-  assert len({(r[3],r[7]) for r in edge_rows})==len(edge_rows),'unresolved same-time sequence collision'
-  good=[];excluded=Counter();labels={};metadata={}
-  for row,u,v,ns,op,uid,y,seq in edge_rows:
-   t=action_key[attrs[u][0],op,attrs[v][0]]
-   if y or (si and (u in attack or v in attack)):status='attack'
-   elif si and (u not in pred or v not in pred):status='unknown_label'
-   else:status='normal'
-   labels[row]=status;metadata[row]=(u,v,t)
-   if status!='normal':excluded[status]+=1;continue
-   good.append((row,u,v,t));acount[si][t]+=1
-  if w==0:
-   checked=check_real_window(good,LENGTHS,paths)
-   if checked is None:raise ValueError('First normal training window has no real validation chain')
-   dump(out/'REAL_PATH_CHECK.json',dict(window=w,**checked))
-  totals=paths(good,si==1)
-  audit=dict(window=w,split=split,native_edges=len(edge_rows),normal_edges=len(good),attack_edges=excluded['attack'],unknown_label_edges=excluded['unknown_label'])
-  for k in LENGTHS:
-   values=totals[k];audit['instances_'+str(k)]=sum(v[0] for v in values.values());audit['types_'+str(k)]=len(values)
-   audit['semantic_unknown_instances_'+str(k)]=sum(v[0] for seq,v in values.items() if any(t in missing_action for t in seq))
-   if k==1:continue
-   rows=[]
-   for seq,(n,witness,nodes) in values.items():
-    b=pack(seq)
-    if si:
-     seen=b in all_train_sequences[k];atomic_seen=all(t in all_train for t in seq);complete=not any(t in missing_action for t in seq)
-     bit=8 if not complete else 1 if seen else 2 if atomic_seen else 4
-     for node in nodes:flags[k][node]|=bit
+ done={w for w, in counts.execute('select w from window_done')}
+ for split in ('train','test'):
+  jobs=[(w,split) for w, in db.execute('select w from windows where split=? order by w',(split,)) if w not in done]
+  configure(root,attrs,action_key,pred,attack,missing_action,all_train,all_train_sequences,(paths,check_real_window,pack))
+  for audit,rows,node_flags,real in window_results(jobs,a.workers):
+   w=audit['window'];start=time.monotonic()
+   if real:dump(out/'REAL_PATH_CHECK.json',dict(window=w,**real))
+   with counts:
+    counts.executemany("""insert into counts values(?,?,?,?,?,?) on conflict(k,seq)
+       do update set train=bigadd(train,excluded.train),test=bigadd(test,excluded.test)""",rows)
+    counts.executemany("""insert into node_flags values(?,?,?) on conflict(k,id)
+       do update set bits=bits|excluded.bits""", ((k,n,b) for (k,n),b in node_flags.items()))
+    audit['write_s']=round(time.monotonic()-start,4)
+    counts.execute('insert into window_done values(?,?)',(w,json.dumps(audit)))
+   done.add(w)
+   dump(root/'PROGRESS.json',dict(window=w,split=split,windows_done=len(done),last_window=audit))
+   if w==0 or len(done)%25==0:print('verified windows',len(done),audit,flush=True)
+  if split=='train':
+   for k,b in counts.execute("select k,seq from counts where train!='0'"):
+    if k==1:all_train.add(unpack(b)[0])
     else:all_train_sequences[k].add(b)
-    rows.append((k,b,str(n) if not si else '0',str(n) if si else '0',w,json.dumps(witness)))
-   counts.executemany('insert into counts values(?,?,?,?,?,?) on conflict(k,seq) do update set train=bigadd(train,excluded.train),test=bigadd(test,excluded.test)',rows)
-  if not si:all_train.update(t for _,_,_,t in good)
-  counts.commit();audits.append(audit)
-  dump(root/'PROGRESS.json',dict(window=w,split=split,windows_done=len(audits),last_window=audit))
-  if w%10==0:print('paths',w,split,{k:audit['instances_'+str(k)] for k in LENGTHS},flush=True)
+ for b,tr,te in counts.execute('select seq,train,test from counts where k=1'):
+  t=unpack(b)[0];acount[0][t]=int(tr);acount[1][t]=int(te)
+ for k,n,b in counts.execute('select k,id,bits from node_flags'):flags[k][n]=b
+ audits=[json.loads(row[0]) for row in counts.execute('select audit from window_done order by w')]
+ assert len(audits)==db.execute('select count(*) from windows').fetchone()[0]
  write(out/'WINDOW_AUDIT.csv',list(audits[0]),([r[k] for k in audits[0]] for r in audits))
  write(out/'ACTION_COUNTS.csv',['action_id','source_semantics','operation','destination_semantics','semantic_complete','train_frequency','test_frequency'],((t,*actions[t],int(t not in missing_action),acount[0][t],acount[1][t]) for t in sorted(actions,key=lambda t:(-acount[0][t],-acount[1][t],t)) if acount[0][t] or acount[1][t]))
  # Fully identified subspace is calculable without treating two unknown file paths as equal.
@@ -153,7 +146,7 @@ def analyze(a):
   if k==1:
    union=[((t,),acount[0][t],acount[1][t],None,None) for t in actions if acount[0][t] or acount[1][t]]
   else:
-   union=[(unpack(b),int(tr),int(te),w,json.loads(wit)) for b,tr,te,w,wit in counts.execute('select seq,train,test,w,witness from counts where k=?',(k,))]
+   union=[(unpack(b),int(tr),int(te),w,unpack(wit)) for b,tr,te,w,wit in counts.execute('select seq,train,test,w,witness from counts where k=?',(k,))]
   union.sort(key=lambda r:(-r[1],-r[2],r[0]))
   seen=zs=outside=outside_inst=unknown_types=unknown_test_inst=0;train_types=test_types=0
   all_dist=Counter();zs_dist=Counter();zsgroups=Counter();zstypes=Counter();records=[]
@@ -235,6 +228,6 @@ def analyze(a):
  print('COMPLETE observable statistics; see semantic completeness limitation',flush=True)
 
 if __name__=='__main__':
- p=argparse.ArgumentParser();p.add_argument('--self-check',action='store_true');p.add_argument('--root',type=Path);p.add_argument('--cell',type=Path);a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--self-check',action='store_true');p.add_argument('--root',type=Path);p.add_argument('--cell',type=Path);p.add_argument('--workers',type=int,default=4);a=p.parse_args()
  if a.self_check:selfcheck()
  else:analyze(a)
