@@ -35,6 +35,7 @@ for i, split in enumerate(('train','test')):
 for k,r in summary.items():
     for suffix in ('known_semantics','observable_signatures'):
         candidate = as_int(r,'candidate_'+suffix)
+        assert all(as_int(r,part+'_'+suffix)>=0 for part in ('Seen','Zero_shot','Potential'))
         assert candidate == sum(as_int(r,part+'_'+suffix) for part in ('Seen','Zero_shot','Potential'))
     if k==1:
         continue
@@ -111,3 +112,17 @@ for k in (1,2,3):
         assert sum(int(r[col+'_count']) for r in ds)==total
         if total:assert math.isclose(math.fsum(float(r[col+'_fraction']) for r in ds),1.0)
 print('Knee decisions, disjoint membership, weighted distributions and recoverable reference verified.')
+
+native=sqlite3.connect('file:'+str(root.parent.parent/'native.sqlite')+'?mode=ro&immutable=1',uri=True)
+expected_normal={n for n, in native.execute('select id from pred where gt=0')}
+expected_gt={n:gt for n,gt in native.execute('select id,gt from pred')}
+matched=defaultdict(set)
+for row in rows('NODE_SCORES.csv'):
+    n=int(row['node_id']);gt=int(row['gt'])
+    assert expected_gt[n]==gt
+    if gt==0:matched[int(row['length'])].add(n)
+assert set(matched)=={2,3} and all(group==expected_normal for group in matched.values())
+native.close()
+cert=json.loads((root/'NATIVE_INPUT_AUDIT.json').read_text())
+assert (cert['native_loader_train_batches'],cert['logged_train_batches'])==(3665,3665)
+print('Exact normal node sets and original loader batches verified.')

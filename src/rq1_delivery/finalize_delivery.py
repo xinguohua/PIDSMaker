@@ -22,6 +22,9 @@ for rid in ids:
     loc=runs/rid
     manifest[rid]={'meta':json.loads((loc/'meta.json').read_text()),'status':json.loads((loc/'status.json').read_text())}
 assert manifest[ids[-1]]['status']['state']=='succeeded'
+packaging_commit=subprocess.check_output(['git','-C',str(Path(__file__).resolve().parent),'rev-parse','HEAD'],text=True).strip()
+manifest['delivery']={'commit':packaging_commit,'command':sys.argv}
+
 for name in ['RAW_AUDIT.json','NATIVE_WINDOWS.csv','INPUT_AUDIT.json']:
     shutil.copy2(root/name,out/name)
 shutil.copy2(protocol_dir/'PROTOCOL.json',out/'PROTOCOL.json')
@@ -82,6 +85,9 @@ audit['analysis_operating_point']=dict(scope=knee['scope'],threshold=knee['polic
 (out/'INPUT_AUDIT.json').write_text(json.dumps(audit,indent=2))
 with (out/'INDEX.md').open('a') as f:
     f.write('\nOPERATING_POINT.json 为拐点口径；INPUT_AUDIT.json 同时保留原生指标。PHASE_TIMES.json 和 PERFORMANCE_REPORT.md 记录执行成本；CASE_COVERAGE.json 和 EXAMPLES.jsonl 记录六类案例检查；FIGURES/ 含全部正式图。图一源为 FREQUENCY_BINS.csv、完整类型表、COMPOSITION_SUMMARY.csv 和 rank_intervals；图二源为 ACTION_DISTRIBUTIONS/，图三源为 DETECTION_PERFORMANCE.csv 和 NODE_SCORES.csv。\n')
+metadata=json.loads((out/'PROTOCOL.json').read_text())
+with (out/'INDEX.md').open('a') as f:
+    f.write(f'\n计数与逐节点验收输入绑定见 PROTOCOL.json。交付脚本提交 {packaging_commit}。\n')
 archive=protocol_dir/'RQ1_Action_Composition_完整结果.zip'
 temp=archive.with_suffix('.partial')
 with zipfile.ZipFile(temp,'w',zipfile.ZIP_DEFLATED,compresslevel=2,allowZip64=True) as z:
