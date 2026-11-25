@@ -13,13 +13,18 @@ import tracemalloc
 from action_index import ActionIndex, LENGTHS, Participation
 
 BASELINE = 'db672ff9d985cc698eb66cb945bd03bbdba9eba4'
-CASES = [(50,20,1),(20,4,4),(8,8,8)]
+CASES = [(50,20,1),(20,4,4),(8,8,8),(12,24,3)]
 
 
 def worker(case, method):
     groups_n,copies,actions_n=CASES[case]
     groups=[[(g*copies+i,0,0,i%actions_n) for i in range(copies)] for g in range(groups_n)]
     endpoints={e[0]:(2*e[0],2*e[0]+1) for batch in groups for e in batch}
+    if case == 3:
+        # Eight native components share three Action types.
+        groups = [[(g*copies+i, 4*(i//3)+i%3, 4*(i//3)+i%3+1, i%3)
+                   for i in range(copies)] for g in range(groups_n)]
+        endpoints = {e[0]:e[1:3] for batch in groups for e in batch}
     if method=='reference':
         source=subprocess.check_output(['git','show',BASELINE+':src/action_paths.py'],text=True,
                                        cwd=Path(__file__).resolve().parents[1])
@@ -55,9 +60,16 @@ def worker(case, method):
         phases.update(prefix_visits=index.branches,operations=index.operations)
     seconds=time.perf_counter()-start
     _,peak=tracemalloc.get_traced_memory();tracemalloc.stop()
+    # Compare each type independently, outside the timed production pass.
+    membership_digest = hashlib.sha256()
+    for k in LENGTHS:
+        entries = (totals[k].items() if method == 'reference' else index.sequences(k))
+        for seq, value in sorted(entries):
+            members = value[2] if method == 'reference' else index.nodes(seq, endpoints)
+            membership_digest.update(repr((k,seq,sorted(members))).encode())
     rss=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*(1 if sys.platform=='darwin' else 1024)
     return dict(method=method,seconds=seconds,traced_peak_bytes=peak,peak_rss_bytes=rss,
-                digest=hex(digest),types=types,instances=str(instances),
+                digest=hex(digest),membership_digest=membership_digest.hexdigest(),types=types,instances=str(instances),
                 nodes={k:sorted(ns) for k,ns in nodes.items()},phases=phases)
 
 
@@ -65,12 +77,12 @@ def main():
     p=argparse.ArgumentParser();p.add_argument('--worker',choices=['reference','stream']);p.add_argument('--case',type=int);a=p.parse_args()
     if a.worker:
         print(json.dumps(worker(a.case,a.worker)));return
-    report=dict(baseline=BASELINE,scope='synthetic; identical content joins and actual endpoint membership; not window 437',
+    report=dict(baseline=BASELINE,scope='synthetic native joins; includes disconnected native IDs sharing Action types',
                 timing='tracemalloc enabled for both; isolated processes; 45 second limit each',cases=[])
     for i,(gs,copies,actions) in enumerate(CASES):
         results=[json.loads(subprocess.check_output([sys.executable,__file__,'--worker',m,'--case',str(i)],timeout=45))
                  for m in ('reference','stream')]
-        for field in ('digest','types','instances','nodes'):assert results[0][field]==results[1][field],field
+        for field in ('digest','membership_digest','types','instances','nodes'):assert results[0][field]==results[1][field],field
         for r in results:r['node_counts']={k:len(v) for k,v in r.pop('nodes').items()}
         report['cases'].append(dict(events=gs*copies,groups=gs,actions=actions,equal=True,results=results))
     print(json.dumps(report,indent=2))

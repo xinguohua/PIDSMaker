@@ -3,7 +3,7 @@ import sqlite3
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from action_paths import pack, paths
+from action_paths import candidate_space, pack, paths
 from action_path_check import check_real_window
 import action_window as window
 from action_index import ActionIndex
@@ -11,7 +11,22 @@ from unittest.mock import patch
 
 
 class ContentJoinTest(unittest.TestCase):
-    def test_disconnected_instances_do_not_join(self):
+    def test_reference_search_checks_every_event_in_a_tied_group(self):
+        groups = [[(0,9,10,1), (1,0,1,2)], [(2,1,2,3)], [(3,2,3,4)]]
+        audit = check_real_window(groups, (1,2,3), paths)
+        self.assertEqual(audit['longest_path_event_rows'], [1,2,3])
+        self.assertEqual(audit['exact_instances'], {1:3,2:2,3:1})
+        groups = [[(0,0,1,2), (1,1,2,3)], [(2,2,3,4)]]
+        audit = check_real_window(groups, (1,2,3), paths)
+        self.assertFalse(audit['longest_requested_length_found'])
+        self.assertEqual(audit['exact_instances'], {1:3,2:1,3:0})
+
+    def test_sparse_output_lengths_advance_through_intermediate_steps(self):
+        actions = {1:('a','x','a'), 2:('a','y','a')}
+        self.assertEqual(candidate_space(actions, actions, {'a'}, (1,2,3,5)),
+                         {1:2,2:4,3:8,5:32})
+
+    def test_equal_content_across_native_ids_joins(self):
         attrs = {17: ('A', 1), 92: ('A', 1), 31: ('B', 1), 84: ('B', 1),
                  7: ('C', 1), 8: ('unknown', 0), 9: ('unknown', 0)}
         events = [(17, 31, 'write', 1), (92, 84, 'write', 2),
@@ -37,14 +52,14 @@ class ContentJoinTest(unittest.TestCase):
                     audit, rows, flags, _ = window.compute_one((1,'test'),tmp)
                 groups, _, _, _ = window.read_window(
                     window._connection, 1, True, attrs, keys, dict.fromkeys(attrs), set())
-                self.assertEqual(ActionIndex(groups).witness((1,2)), (1,3))
+                self.assertEqual(ActionIndex(groups).witness((1,2)), (0,2))
             finally:
                 window._connection.close()
                 window._support.close()
             pairs = [(b,n) for k,b,_,n,_ in window.result_rows(rows) if k==2]
-            self.assertEqual(pairs, [(pack((1,2)), '1')])
-            self.assertEqual(audit['instances_2'],1)
-            self.assertEqual(set(flags),{(2,n) for n in (92,84,7)})
+            self.assertEqual(pairs, [(pack((1,2)), '3')])
+            self.assertEqual(audit['instances_2'],3)
+            self.assertEqual(set(flags),{(2,n) for n in (17,31,92,84,7)})
 
     def test_window_order_support_missing_and_exclusions(self):
         # Same ns with increasing sequence joins; same pair does not. ID 99 is

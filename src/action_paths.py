@@ -77,14 +77,14 @@ def bind_protocol(counts, binding):
   if not existing:counts.execute('insert into protocol values(?)',(text,))
 
 
-def candidate_space(actions, selected, complete_endpoints):
+def candidate_space(actions, selected, complete_endpoints, lengths=LENGTHS):
  dp={t:1 for t in selected};result={1:len(dp)}
- for k in LENGTHS[1:]:
+ for k in range(2,max(lengths)+1):
   by=Counter()
   for t,n in dp.items():
    if actions[t][2] in complete_endpoints:by[actions[t][2]]+=n
   dp={t:by[actions[t][0]] for t in selected}
-  result[k]=sum(dp.values())
+  if k in lengths:result[k]=sum(dp.values())
  return result
 
 
@@ -140,8 +140,8 @@ def analyze(a):
   dump(pending,binding)
   pending.replace(identity)
  (out/'MATCHING_RULES.md').write_text(
-  '# 原生图路径\n\n在同一原生窗口内，前一事件目标与后一事件来源的原生节点 ID 相同，且 (timestampNanos, CDM sequence) 二元组按字典序严格递增，即计为一次原生图连接。'
-  '不同原生 ID 即使内容相同也不能相接，每个见证保留全部事件及原生端点。'
+  '# 原生图路径\n\n在同一原生窗口内，前一事件目标与后一事件来源均具备有效内容且完整签名相同，且 (timestampNanos, CDM sequence) 二元组按字典序严格递增，即计为一次内容接续。'
+  '不同原生 ID 可按相同内容相接，缺失内容不能作为接点，每个见证保留全部事件及原生端点。'
   '按有序事件行序列计实例，按有序 Action 签名计类型。节点检测分组使用实际参与事件的节点 ID。\n',encoding='utf-8')
  for name in ('COMPOSITION_COUNTS','ACTION_DISTRIBUTIONS'): (out/name).mkdir(exist_ok=True)
  counts.create_function('bigadd',2,lambda x,y:str(int(x)+int(y)))
@@ -234,7 +234,7 @@ def analyze(a):
      ev.append(dict(zip(['window','row','source_id','destination_id','timestamp_ns','operation','event_uuid','edge_label','sequence','actor_uuid','object_uuid','raw_file','raw_line','raw_offset'],q)))
     assert tuple(action_key[attrs[e['source_id']][0],e['operation'],attrs[e['destination_id']][0]] for e in ev)==seq
     assert len({e['event_uuid'] for e in ev})==k
-    assert all(x['destination_id']==y['source_id'] and (x['timestamp_ns'],x['sequence'])<(y['timestamp_ns'],y['sequence']) for x,y in zip(ev,ev[1:]))
+    assert all(attrs[x['destination_id']][1] and attrs[y['source_id']][1] and attrs[x['destination_id']][0]==attrs[y['source_id']][0] and (x['timestamp_ns'],x['sequence'])<(y['timestamp_ns'],y['sequence']) for x,y in zip(ev,ev[1:]))
     examples.append(dict(length=k,category=kind,actions=list(seq),action_train_frequencies=support,train_frequency=tr,test_frequency=te,events=ev,entity_semantics={str(n):json.loads(attrs[n][0]) for e in ev for n in (e['source_id'],e['destination_id'])}))
   assert (sum_train,sum_test)==(train_instances,test_instances)
   potential=candidate[k]-seen-zs;assert potential>=0
@@ -282,7 +282,7 @@ def analyze(a):
   baseline=json.loads((a.cell/'metrics.json').read_text());assert len(groups['All'])==baseline['FP']+baseline['TN'];assert sum(r[1] for r in groups['All'])==baseline['FP']
  write(out/'DETECTION_PERFORMANCE.csv',['length','group','nodes','TP','FP','TN','FN','FPR','FNR','status','score_min','score_median_lower','score_max'],performance)
  write(out/'NODE_SCORES.csv',['length','node_id','gt','prediction','score','threshold','group','membership_bits'],node_rows)
- dump(out/'ANALYSIS_AUDIT.json',dict(missing_file_paths=missing_file_paths,join_rule="same_native_node_id",exact_dp=True,sampling=False,path_lengths=LENGTHS,no_duplicate_event_per_path=True,order='raw timestampNanos, raw sequence',windows=len(audits),semantic_unknown_actions=len(missing_action),candidate_scope='fully identified semantic endpoints only',baseline_matched=True,known_attack_nodes=len(attack),source=str(root/'native.sqlite')))
+ dump(out/'ANALYSIS_AUDIT.json',dict(missing_file_paths=missing_file_paths,join_rule="equal_complete_endpoint_signature",exact_dp=True,sampling=False,path_lengths=LENGTHS,no_duplicate_event_per_path=True,order='raw timestampNanos, raw sequence',windows=len(audits),semantic_unknown_actions=len(missing_action),candidate_scope='fully identified semantic endpoints only',baseline_matched=True,known_attack_nodes=len(attack),source=str(root/'native.sqlite')))
  print('COMPLETE observable statistics; see semantic completeness limitation',flush=True)
 
 if __name__=='__main__':

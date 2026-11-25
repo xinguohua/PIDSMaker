@@ -5,7 +5,7 @@ import json
 import time
 
 LENGTHS = (1, 2, 3)
-PROTOCOL = 'native_paths_len3_v1'
+PROTOCOL = 'content_paths_len3_v1'
 
 
 def signature(value):
@@ -81,7 +81,7 @@ class ActionIndex:
             raise ValueError("unsupported path length")
         last_report = time.monotonic()
         def walk(seq, frontier):
-            # frontier[node][group] counts paths ending on that exact native node.
+            # frontier[node][group] counts paths ending on that endpoint signature.
             nonlocal last_report
             self.branches += 1
             if progress and time.monotonic() - last_report >= 5:
@@ -127,7 +127,7 @@ class ActionIndex:
         yield from walk((), {})
 
     def _forward(self, seq):
-        # Earliest reachable arrival and its event witness, per native endpoint.
+        # Earliest reachable arrival and its event witness, per endpoint signature.
         previous = {}
         layers = []
         for i, label in enumerate(seq):

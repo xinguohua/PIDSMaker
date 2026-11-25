@@ -76,8 +76,12 @@ def read_window(db, w, test, attrs, keys, pred, attack):
         elif test and (u not in pred or v not in pred):
             excluded['unknown'] += 1
         else:
-            action = keys[attrs[u][0], op, attrs[v][0]]
-            edge=(row,u,v,action)
+            source, source_known = attrs[u]
+            destination, destination_known = attrs[v]
+            action = keys[source, op, destination]
+            # Complete signatures are strings. Distinct sentinels prevent unknown joins.
+            edge = (row, source if source_known else -1,
+                    destination if destination_known else -2, action)
             endpoints[row]=(u,v)
             if previous_order != (ns,seq):
                 ordered_groups.append([])
@@ -97,9 +101,7 @@ def compute_one(job, spool_dir):
         _connection, w, test, ctx['attrs'], ctx['keys'], ctx['pred'], ctx['attack'])
     read = time.monotonic()
     lengths = LENGTHS
-    real = check([group[0] for group in ordered_groups], lengths, paths, endpoints) if w == 0 else None
-    if w == 0 and real is None:
-        raise ValueError('No reference chain in validation window')
+    real = check(ordered_groups, lengths, paths, endpoints) if w == 0 else None
     index = ActionIndex(ordered_groups)
     indexed = time.monotonic()
     exact_total = independent_instance_counts(ordered_groups)
