@@ -98,7 +98,7 @@ def analyze(a):
    if not(sc and dc):missing_action.add(t)
  counts=sqlite3.connect(root/'counts.sqlite')
  counts.create_function('bigadd',2,lambda x,y:str(int(x)+int(y)))
- counts.executescript("""pragma journal_mode=wal; pragma synchronous=normal; pragma cache_size=-262144;
+ counts.executescript("""pragma journal_mode=wal; pragma synchronous=normal; pragma cache_size=-1048576; pragma wal_autocheckpoint=262144;
   create table if not exists counts(k integer,seq blob,train text,test text,w integer,witness blob,primary key(k,seq)) without rowid;
   create table if not exists window_done(w integer primary key,audit text);
   create table if not exists node_flags(k integer,id integer,bits integer,primary key(k,id)) without rowid;""")
@@ -108,19 +108,21 @@ def analyze(a):
  for split in ('train','test'):
   jobs=[(w,split) for w, in db.execute('select w from windows where split=? order by w',(split,)) if w not in done]
   configure(root,attrs,action_key,pred,attack,missing_action,all_train,all_train_sequences,(paths,check_real_window,pack))
+  remaining=len(jobs)
   for audit,rows,node_flags,real in window_results(jobs,a.workers):
    w=audit['window'];start=time.monotonic()
    if real:dump(out/'REAL_PATH_CHECK.json',dict(window=w,**real))
-   with counts:
-    counts.executemany("""insert into counts values(?,?,?,?,?,?) on conflict(k,seq)
+   counts.executemany("""insert into counts values(?,?,?,?,?,?) on conflict(k,seq)
        do update set train=bigadd(train,excluded.train),test=bigadd(test,excluded.test)""",rows)
-    counts.executemany("""insert into node_flags values(?,?,?) on conflict(k,id)
+   counts.executemany("""insert into node_flags values(?,?,?) on conflict(k,id)
        do update set bits=bits|excluded.bits""", ((k,n,b) for (k,n),b in node_flags.items()))
-    audit['write_s']=round(time.monotonic()-start,4)
-    counts.execute('insert into window_done values(?,?)',(w,json.dumps(audit)))
-   done.add(w)
-   dump(root/'PROGRESS.json',dict(window=w,split=split,windows_done=len(done),last_window=audit))
-   if w==0 or len(done)%25==0:print('verified windows',len(done),audit,flush=True)
+   audit['write_s']=round(time.monotonic()-start,4)
+   counts.execute('insert into window_done values(?,?)',(w,json.dumps(audit)))
+   done.add(w);remaining-=1
+   if len(done)%12==0 or remaining==0 or len(rows)>200000:
+    counts.commit()
+    dump(root/'PROGRESS.json',dict(window=w,split=split,windows_done=len(done),last_window=audit))
+    print('committed windows',len(done),split,flush=True)
   if split=='train':
    for k,b in counts.execute("select k,seq from counts where train!='0'"):
     if k==1:all_train.add(unpack(b)[0])
@@ -145,18 +147,31 @@ def analyze(a):
   for t,n in observable_dp.items():by[actions[t][2]]+=n
   observable_dp={t:by[actions[t][0]] for t in all_train}
   observable_space[k]=sum(observable_dp.values())
- summary=[];zero=[];corr=[];examples=[]
+ summary=[];corr=[];examples=[]
+ zero_file=(out/'ZERO_SHOT_ANALYSIS.csv').open('w',newline='')
+ zero_writer=csv.writer(zero_file)
+ zero_writer.writerow(['length','action_ids','semantic_complete','group','test_instances','action_train_frequencies'])
  for k in LENGTHS:
   train_instances=sum(r['instances_'+str(k)] for r in audits if r['split']=='train');test_instances=sum(r['instances_'+str(k)] for r in audits if r['split']=='test')
   if k==1:
    union=[((t,),acount[0][t],acount[1][t],None,None) for t in actions if acount[0][t] or acount[1][t]]
+   union.sort(key=lambda r:(-r[1],-r[2],r[0]))
   else:
-   union=[(unpack(b),int(tr),int(te),w,unpack(wit)) for b,tr,te,w,wit in counts.execute('select seq,train,test,w,witness from counts where k=?',(k,))]
-  union.sort(key=lambda r:(-r[1],-r[2],r[0]))
+   union=((unpack(b),int(tr),int(te),w,unpack(wit)) for b,tr,te,w,wit in counts.execute(
+       """select seq,train,test,w,witness from counts where k=? order by length(train) desc,train desc,
+          length(test) desc,test desc,seq""",(k,)))
+   detail=(out/'COMPOSITION_COUNTS'/f'length_{k}.csv').open('w',newline='')
+   detail_writer=csv.writer(detail)
+   detail_writer.writerow(['training_rank','action_ids','train_frequency','test_frequency','semantic_complete','observed_class','action_train_frequencies'])
+  sum_train=sum_test=observable_zs=observable_out=observable_out_inst=0
   seen=zs=outside=outside_inst=unknown_types=unknown_test_inst=0;train_types=test_types=0
-  all_dist=Counter();zs_dist=Counter();zsgroups=Counter();zstypes=Counter();records=[]
+  all_dist=Counter();zs_dist=Counter();zsgroups=Counter();zstypes=Counter()
   for rank,(seq,tr,te,w,wit) in enumerate(union,1):
    train_types+=tr>0;test_types+=te>0;complete=not any(t in missing_action for t in seq);atomic=all(t in all_train for t in seq)
+   sum_train+=tr;sum_test+=te
+   observable_zs+=int(not tr and te>0 and atomic)
+   observable_out+=int(te>0 and not atomic)
+   if not atomic:observable_out_inst+=te
    if complete:
     for left,right in zip(seq,seq[1:]):assert actions[left][2]==actions[right][0]
     seen+=tr>0;zs+=tr==0 and te>0 and atomic
@@ -169,8 +184,8 @@ def analyze(a):
     if not tr:
      g='all_actions_seen' if atomic else 'unseen_action';zsgroups[g]+=te;zstypes[g]+=1
      for t in seq:zs_dist[t]+=te
-     if k>1:zero.append((k,json.dumps(seq),int(complete),g,te,json.dumps(support)))
-   records.append((rank,json.dumps(seq),tr,te,int(complete),kind,json.dumps(support)))
+     if k>1:zero_writer.writerow((k,json.dumps(seq),int(complete),g,te,json.dumps(support)))
+   if k>1:detail_writer.writerow((rank,json.dumps(seq),tr,te,int(complete),kind,json.dumps(support)))
    if k>1 and te and not tr and complete and sum(x['length']==k and x['category']==kind for x in examples)<2:
     # Stored witness may be training only for seen types; unseen types necessarily test.
     ev=[]
@@ -180,17 +195,14 @@ def analyze(a):
     assert len({e['event_uuid'] for e in ev})==k
     assert all(x['destination_id']==y['source_id'] and (x['timestamp_ns'],x['sequence'])<(y['timestamp_ns'],y['sequence']) for x,y in zip(ev,ev[1:]))
     examples.append(dict(length=k,category=kind,actions=list(seq),action_train_frequencies=support,train_frequency=tr,test_frequency=te,events=ev,entity_semantics={str(n):json.loads(attrs[n][0]) for e in ev for n in (e['source_id'],e['destination_id'])}))
-  assert sum(r[1] for r in union)==train_instances and sum(r[2] for r in union)==test_instances
+  assert (sum_train,sum_test)==(train_instances,test_instances)
   potential=candidate[k]-seen-zs;assert potential>=0
   summary.append((k,train_instances,train_types,test_instances,test_types,candidate[k],seen,zs,potential,seen/candidate[k] if candidate[k] else 'NA',outside,outside_inst,unknown_types,unknown_test_inst,'fully_identified_action_subspace; full_semantic_result_incomplete' if missing_action else 'complete'))
-  observable_zs=sum(tr==0 and te>0 and all(t in all_train for t in seq) for seq,tr,te,w,wit in union)
-  observable_out=sum(te>0 and any(t not in all_train for t in seq) for seq,tr,te,w,wit in union)
-  observable_out_inst=sum(te for seq,tr,te,w,wit in union if any(t not in all_train for t in seq))
   assert observable_space[k]>=train_types+observable_zs
   summary[-1]+= (observable_space[k],train_types,observable_zs,observable_space[k]-train_types-observable_zs,
                  train_types/observable_space[k] if observable_space[k] else 'NA',observable_out,observable_out_inst)
   if k==1:continue
-  write(out/'COMPOSITION_COUNTS'/f'length_{k}.csv',['training_rank','action_ids','train_frequency','test_frequency','semantic_complete','observed_class','action_train_frequencies'],records)
+  detail.close()
   total_all=sum(all_dist.values());total_zs=sum(zs_dist.values());assert total_all==k*test_instances
   order=sorted(all_dist,key=lambda t:(-all_dist[t],t))
   dist=[(i+1,t,all_dist[t],zs_dist[t],all_dist[t]/total_all if total_all else 'NA',zs_dist[t]/total_zs if total_zs else 'NA',acount[0][t],int(t not in missing_action)) for i,t in enumerate(order)]
@@ -207,7 +219,7 @@ def analyze(a):
    corr.append((k,scope,len(sel),total_all,total_zs,r,status))
   write(out/'ACTION_DISTRIBUTIONS'/f'length_{k}_zero_shot_groups.csv',['group','types','instances','type_fraction','instance_fraction'],((g,zstypes[g],zsgroups[g],zstypes[g]/sum(zstypes.values()) if zstypes else 'NA',zsgroups[g]/sum(zsgroups.values()) if zsgroups else 'NA') for g in ('all_actions_seen','unseen_action')))
  write(out/'COMPOSITION_SUMMARY.csv',['length','train_instances','train_observed_types','test_instances','test_observed_types','candidate_known_semantics','Seen_known_semantics','Zero_shot_known_semantics','Potential_known_semantics','training_coverage_known_semantics','test_unseen_action_known_types','test_unseen_action_known_instances','semantic_unknown_observed_types','semantic_unknown_test_instances','status','candidate_observable_signatures','Seen_observable_signatures','Zero_shot_observable_signatures','Potential_observable_signatures','coverage_observable_signatures','test_unseen_action_observable_types','test_unseen_action_observable_instances'],summary)
- write(out/'ZERO_SHOT_ANALYSIS.csv',['length','action_ids','semantic_complete','group','test_instances','action_train_frequencies'],zero)
+ zero_file.close()
  write(out/'ACTION_DISTRIBUTIONS'/'CORRELATIONS.csv',['length','range','categories','All_denominator','Zero_shot_denominator','pearson','status'],corr)
  with (out/'EXAMPLES.jsonl').open('w') as f:
   for r in examples:f.write(json.dumps(r,ensure_ascii=False)+'\n')
