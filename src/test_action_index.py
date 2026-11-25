@@ -75,6 +75,12 @@ class IndexTest(unittest.TestCase):
         self.assertEqual(result,math.comb(n,3))
         self.assertGreater(result,2**32)
 
+    def test_file_path_completeness(self):
+        from action_composition import semantic_complete
+        for paths,expected in (([],False),([' <UNKNOWN> '],False),(['<unknown>','/tmp/report'],True),
+                               (['/tmp/<unknown>'],True)):
+            self.assertEqual(semantic_complete(dict(kind='file',paths=paths,commands=[])),expected)
+
     def test_signature_lossless(self):
         self.assertEqual(signature('{"b": ["雪", "a"], "a": null}'),
                          signature('{"a":null,"b":["雪","a"]}'))

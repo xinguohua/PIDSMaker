@@ -16,6 +16,12 @@ def ro(p):return sqlite3.connect('file:'+str(p)+'?mode=ro&immutable=1',uri=True)
 def unbox(x):return next(iter(x.values())) if isinstance(x,dict) and len(x)==1 else x
 def present(x):return isinstance(x,str) and x.strip().lower() not in ('','null','none')
 
+def semantic_complete(record):
+ paths=record['paths']
+ if record['kind']=='file':
+  return any(present(p) and p.strip().casefold()!='<unknown>' for p in paths)
+ return bool(paths or (record['kind']=='subject' and record['commands']))
+
 def extract(a):
  import torch,yaml
  sys.path.insert(0,str(a.cell.parents[1]/'code'))
@@ -106,7 +112,7 @@ def recover(a):
   print('raw',fp.name,count,flush=True)
  for uid,(n,kind,label) in nodes.items():
   at=attrs[uid];sem=dict(kind=kind,paths=sorted(at['paths']),commands=sorted(at['cmds']),subtypes=sorted(x for x in at['subtypes'] if x))
-  complete=bool(at['cmds'] or at['paths']) if kind=='subject' else bool(at['paths'])
+  complete=semantic_complete(sem)
   db.execute('insert into attributes values(?,?,?,?)',(n,json.dumps(sem,sort_keys=True,ensure_ascii=False),int(complete),json.dumps(at['evidence'],ensure_ascii=False)))
  reverse={'EVENT_EXECUTE','EVENT_LSEEK','EVENT_MMAP','EVENT_OPEN','EVENT_ACCEPT','EVENT_READ','EVENT_RECVFROM','EVENT_RECVMSG','EVENT_READ_SOCKET_PARAMS','EVENT_CHECK_FILE_ATTRIBUTES','READ'}
  mismatches=Counter();n=0

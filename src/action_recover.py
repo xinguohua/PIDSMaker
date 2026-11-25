@@ -13,7 +13,7 @@ from collections import Counter,defaultdict
 from pathlib import Path
 
 import orjson
-from action_composition import dump,present,unbox
+from action_composition import dump,present,unbox,semantic_complete
 
 REVERSE={'EVENT_EXECUTE','EVENT_LSEEK','EVENT_MMAP','EVENT_OPEN','EVENT_ACCEPT','EVENT_READ',
          'EVENT_RECVFROM','EVENT_RECVMSG','EVENT_READ_SOCKET_PARAMS','EVENT_CHECK_FILE_ATTRIBUTES','READ'}
@@ -138,7 +138,7 @@ def recover(a):
             for u,(n,k) in nodes.items():
                 at=attrs.get(u) or attributes()
                 sem=dict(kind=k,paths=sorted(at['paths']),commands=sorted(at['cmds']),subtypes=sorted(filter(None,at['subtypes'])))
-                complete=bool(at['paths'] or at['cmds']) if k=='subject' else bool(at['paths'])
+                complete=semantic_complete(sem)
                 out.execute('insert into attributes values(?,?,?,?)',(n,json.dumps(sem,sort_keys=True,ensure_ascii=False),int(complete),json.dumps(at['evidence'],ensure_ascii=False)))
     del attrs
     print('matching by timestamp, UUID, operation and directed endpoint identities',flush=True)

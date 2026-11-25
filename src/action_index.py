@@ -10,7 +10,7 @@ PROTOCOL = 'native_paths_len3_v1'
 
 def signature(value):
     """Lossless canonical JSON for the complete frozen attribute record."""
-    return json.dumps(json.loads(value), sort_keys=True, ensure_ascii=False,
+    return json.dumps(json.loads(value) if isinstance(value,str) else value, sort_keys=True, ensure_ascii=False,
                       separators=(',', ':'), allow_nan=False)
 
 

@@ -2,7 +2,7 @@
 import argparse,csv,hashlib,json,math,sqlite3,struct,subprocess,time
 from pathlib import Path
 from collections import Counter,defaultdict
-from action_composition import dump,write,ro,sha
+from action_composition import dump,write,ro,sha,semantic_complete
 from action_path_check import check_real_window
 from action_window import configure,window_results,result_rows,read_window
 from action_index import ActionIndex, signature, PROTOCOL, LENGTHS
@@ -99,7 +99,13 @@ def analyze(a):
  assert dict(db.execute('select split,sum(n) from windows group by split'))=={'train':3426589,'test':2065670}
  db.execute('attach database ? as sem',('file:'+str(root/'semantic.sqlite')+'?mode=ro&immutable=1',))
  raw_audit=json.loads((root/'RAW_AUDIT.json').read_text());assert not raw_audit['mismatches']
- attrs={n:(signature(s),c) for n,s,c in db.execute('select id,semantic,complete from sem.attributes')}
+ attrs={}
+ missing_file_paths=0
+ for node, raw in db.execute('select id,semantic from sem.attributes'):
+  record=json.loads(raw)
+  complete=semantic_complete(record)
+  attrs[node]=(signature(record),complete)
+  if record['kind']=='file' and not complete:missing_file_paths+=1
  pred={n:(gt,p,score,thr) for n,gt,p,score,thr in db.execute('select id,gt,prediction,score,threshold from pred')}
  # Known attack identities include all GT UUIDs, including nodes outside scored universe.
  attack={n for n,(gt,*_) in pred.items() if gt==1}
@@ -276,7 +282,7 @@ def analyze(a):
   baseline=json.loads((a.cell/'metrics.json').read_text());assert len(groups['All'])==baseline['FP']+baseline['TN'];assert sum(r[1] for r in groups['All'])==baseline['FP']
  write(out/'DETECTION_PERFORMANCE.csv',['length','group','nodes','TP','FP','TN','FN','FPR','FNR','status','score_min','score_median_lower','score_max'],performance)
  write(out/'NODE_SCORES.csv',['length','node_id','gt','prediction','score','threshold','group','membership_bits'],node_rows)
- dump(out/'ANALYSIS_AUDIT.json',dict(join_rule="same_native_node_id",exact_dp=True,sampling=False,path_lengths=LENGTHS,no_duplicate_event_per_path=True,order='raw timestampNanos, raw sequence',windows=len(audits),semantic_unknown_actions=len(missing_action),candidate_scope='fully identified semantic endpoints only',baseline_matched=True,known_attack_nodes=len(attack),source=str(root/'native.sqlite')))
+ dump(out/'ANALYSIS_AUDIT.json',dict(missing_file_paths=missing_file_paths,join_rule="same_native_node_id",exact_dp=True,sampling=False,path_lengths=LENGTHS,no_duplicate_event_per_path=True,order='raw timestampNanos, raw sequence',windows=len(audits),semantic_unknown_actions=len(missing_action),candidate_scope='fully identified semantic endpoints only',baseline_matched=True,known_attack_nodes=len(attack),source=str(root/'native.sqlite')))
  print('COMPLETE observable statistics; see semantic completeness limitation',flush=True)
 
 if __name__=='__main__':
