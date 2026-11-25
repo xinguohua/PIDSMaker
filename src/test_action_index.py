@@ -145,3 +145,23 @@ class PersistenceTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class ReferenceRecoveryTest(unittest.TestCase):
+    def test_missing_reference_after_commit(self):
+        import json
+        import sqlite3
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from action_paths import commit_window, restore_reference
+        db = sqlite3.connect(':memory:')
+        db.create_function('bigadd',2,lambda a,b:str(int(a)+int(b)))
+        db.executescript('create table counts(k,seq,train,test,w,primary key(k,seq));create table node_flags(k,id,bits,primary key(k,id));create table window_done(w primary key,audit);')
+        audit = dict(window=0,split='train',reference=dict(all_counts_and_node_memberships_equal=True))
+        with TemporaryDirectory() as directory:
+            out = Path(directory)
+            self.assertTrue(commit_window(db,audit,[(1,b'x','1','0',0)],{}))
+            restore_reference(db,out)
+            self.assertEqual(json.loads((out/'REAL_PATH_CHECK.json').read_text()),dict(window=0,**audit['reference']))
+            self.assertFalse(commit_window(db,audit,[(1,b'x','1','0',0)],{}))
+            self.assertEqual(db.execute('select train from counts').fetchone(),('1',))
+        db.close()
