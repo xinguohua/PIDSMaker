@@ -20,18 +20,19 @@ def initialize():
     path = _context['root'] / 'native.sqlite'
     _connection = sqlite3.connect(f'file:{path}?mode=ro&immutable=1', uri=True)
     _connection.execute('pragma mmap_size=8589934592')
+    _connection.execute('attach database ? as sem',(f'file:{path.parent / "semantic.sqlite"}?mode=ro&immutable=1',))
+    _connection.execute('pragma sem.mmap_size=8589934592')
 
 
 def independent_instance_counts(edges):
     prefixes = defaultdict(lambda: [0] * 5)
     result = [0] * 5
-    for _, u, v, _ in edges:
-        previous = prefixes[u]
-        current = prefixes[v]
+    for batch in edges:
         for offset in range(4, -1, -1):
-            n = previous[offset - 1] if offset else 1
-            current[offset] += n
-            result[offset] += n
+            for _, u, v, _ in batch:
+                n = prefixes[u][offset-1] if offset else 1
+                prefixes[v][offset] += n
+                result[offset] += n
     return result
 
 
@@ -42,33 +43,38 @@ def compute_one(job):
     begin = time.monotonic()
     test = split == 'test'
     edges = _connection.execute('''select e.row,e.u,e.v,e.ns,e.op,e.uuid,e.y,r.seq
-        from edges e join raw_events r using(uuid) where w=? order by e.ns,r.seq''', (w,))
+        from edges e join sem.source r using(w,row) where e.w=? order by e.ns,r.seq''', (w,))
     good = []
     uuids = set()
     previous_order = None
+    ordered_groups=[]
     excluded = Counter()
     for row, u, v, ns, op, uuid, label, seq in edges:
         assert uuid not in uuids, (w, row, 'duplicate event')
         uuids.add(uuid)
-        assert previous_order != (ns, seq), (w, row, 'equal event order')
-        previous_order = ns, seq
         if label or test and (u in ctx['attack'] or v in ctx['attack']):
             excluded['attack'] += 1
         elif test and (u not in ctx['pred'] or v not in ctx['pred']):
             excluded['unknown'] += 1
         else:
             action = ctx['keys'][ctx['attrs'][u][0], op, ctx['attrs'][v][0]]
-            good.append((row, u, v, action))
+            edge=(row,u,v,action)
+            good.append(edge)
+            if previous_order != (ns,seq):
+                ordered_groups.append([])
+                previous_order=(ns,seq)
+            ordered_groups[-1].append(edge)
     read = time.monotonic()
     lengths = (1, 2, 3, 5)
-    real = check(good, lengths, paths) if w == 0 else None
+    real = check([group[0] for group in ordered_groups], lengths, paths) if w == 0 else None
     if w == 0 and real is None:
         raise ValueError('No reference chain in validation window')
-    totals = paths(good, test)
-    exact_total = independent_instance_counts(good)
+    totals = paths(good, test, ordered_groups)
+    exact_total = independent_instance_counts(ordered_groups)
     dp_done = time.monotonic()
     audit = dict(window=w, split=split, native_edges=len(uuids), normal_edges=len(good),
                  attack_edges=excluded['attack'], unknown_label_edges=excluded['unknown'])
+    audit['same_order_extra_events']=len(good)-len(ordered_groups)
     flags = defaultdict(int)
     rows = []
     for k, values in totals.items():

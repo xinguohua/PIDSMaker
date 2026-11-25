@@ -7,30 +7,34 @@ from action_path_check import check_real_window
 from action_window import configure,window_results
 LENGTHS=(1,2,3,5)
 
-def paths(edges, memberships=False):
- """Edges are unique and strictly ordered by (raw ns, raw sequence).
- State (last entity, ordered types) sums distinct event sequences; a representative
- witness and union of participating nodes suffice for examples and node groups.
+def paths(edges, memberships=False, groups=None):
+ """Combine identical typed prefixes at their actual terminal node.
+
+ Update lengths in descending order for every group of indistinguishable
+ timestamps and source sequence numbers. No event in that group can extend
+ another event of the same group.
  """
- states=[None]+[defaultdict(dict) for _ in range(5)]
+ states=[None]+[defaultdict(dict) for _ in range(4)]
  totals={k:{} for k in LENGTHS}
- for eid,u,v,typ in edges:
+ batches=groups if groups is not None else ((edge,) for edge in edges)
+ for batch in batches:
   for k in (5,4,3,2,1):
-   previous=[((),(1,(),{u} if memberships else None))] if k==1 else list(states[k-1].get(u,{}).items())
-   for prefix,(n,w,ns) in previous:
-    seq=prefix+(typ,);witness=w+(eid,);node_set=(ns|{v}) if memberships else None
-    if k<5:
-     dst=states[k][v]
-     if seq in dst:
-      old=dst[seq];old[0]+=n
-      if memberships:old[2].update(node_set)
-     else:dst[seq]=[n,witness,node_set]
-    if k in totals:
-     dst=totals[k]
-     if seq in dst:
-      old=dst[seq];old[0]+=n
-      if memberships:old[2].update(node_set)
-     else:dst[seq]=[n,witness,node_set.copy() if memberships else None]
+   for eid,u,v,typ in batch:
+    previous=[((),(1,(),{u} if memberships else None))] if k==1 else states[k-1].get(u,{}).items()
+    for prefix,(n,w,ns) in previous:
+     seq=prefix+(typ,);witness=w+(eid,);node_set=(ns|{v}) if memberships else None
+     if k<5:
+      dst=states[k][v]
+      if seq in dst:
+       old=dst[seq];old[0]+=n
+       if memberships:old[2].update(node_set)
+      else:dst[seq]=[n,witness,node_set]
+     if k in totals:
+      dst=totals[k]
+      if seq in dst:
+       old=dst[seq];old[0]+=n
+       if memberships:old[2].update(node_set)
+      else:dst[seq]=[n,witness,node_set.copy() if memberships else None]
  return totals
 
 def selfcheck():
@@ -70,8 +74,9 @@ def analyze(a):
  selfcheck();root=a.root;out=root/'results';out.mkdir(exist_ok=True)
  for name in ('COMPOSITION_COUNTS','ACTION_DISTRIBUTIONS'): (out/name).mkdir(exist_ok=True)
  db=ro(root/'native.sqlite')
+ db.execute('attach database ? as sem',('file:'+str(root/'semantic.sqlite')+'?mode=ro&immutable=1',))
  raw_audit=json.loads((root/'RAW_AUDIT.json').read_text());assert not raw_audit['mismatches']
- attrs={n:(s,c) for n,s,c in db.execute('select id,semantic,complete from attributes')}
+ attrs={n:(s,c) for n,s,c in db.execute('select id,semantic,complete from sem.attributes')}
  pred={n:(gt,p,score,thr) for n,gt,p,score,thr in db.execute('select id,gt,prediction,score,threshold from pred')}
  # Known attack identities include all GT UUIDs, including nodes outside scored universe.
  attack={n for n,(gt,*_) in pred.items() if gt==1}
@@ -170,7 +175,7 @@ def analyze(a):
     # Stored witness may be training only for seen types; unseen types necessarily test.
     ev=[]
     for row in wit:
-     q=db.execute('select e.*,r.seq,r.actor,r.obj,r.file,r.line,r.offset from edges e join raw_events r using(uuid) where e.w=? and e.row=?',(w,row)).fetchone()
+     q=db.execute('select e.*,r.seq,r.actor,r.obj,r.file,r.line,r.offset from edges e join sem.source r using(w,row) where e.w=? and e.row=?',(w,row)).fetchone()
      ev.append(dict(zip(['window','row','source_id','destination_id','timestamp_ns','operation','event_uuid','edge_label','sequence','actor_uuid','object_uuid','raw_file','raw_line','raw_offset'],q)))
     assert len({e['event_uuid'] for e in ev})==k
     assert all(x['destination_id']==y['source_id'] and (x['timestamp_ns'],x['sequence'])<(y['timestamp_ns'],y['sequence']) for x,y in zip(ev,ev[1:]))
