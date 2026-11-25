@@ -60,8 +60,8 @@ for c in pc['controls']:
 # Bundle all owned A/B events for compact representatives; large traces remain remote.
 samples=list(examples.values())+[c['example'] for c in controls]
 member_ids=sorted({u for hit in samples for u in hit['A_uids']+hit['B_uids']})
-d.execute('create temp table sample_members as select unnest(?::bigint[]) owner',[member_ids])
-d.execute(f"copy (select e.* from g.events e semi join sample_members using(owner) order by eid) to '{out}/EXAMPLE_BEHAVIOR_EVENTS.csv' (header,delimiter ',')")
+d.execute('create temp table sample_members as select unnest(?::bigint[]) as uid',[member_ids])
+d.execute(f"copy (select e.* from g.events e semi join sample_members s on e.owner=s.uid order by eid) to '{out}/EXAMPLE_BEHAVIOR_EVENTS.csv' (header,delimiter ',')")
 manifest=[]
 for f in sorted(r.iterdir()):
     if f.is_file():
