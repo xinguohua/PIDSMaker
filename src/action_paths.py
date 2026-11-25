@@ -101,7 +101,7 @@ def analyze(a):
   good=[];excluded=Counter();labels={};metadata={}
   for row,u,v,ns,op,uid,y,seq in edge_rows:
    t=action_key[attrs[u][0],op,attrs[v][0]]
-   if y or u in attack or v in attack:status='attack'
+   if y or (si and (u in attack or v in attack)):status='attack'
    elif si and (u not in pred or v not in pred):status='unknown_label'
    else:status='normal'
    labels[row]=status;metadata[row]=(u,v,t)
