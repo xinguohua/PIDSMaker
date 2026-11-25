@@ -54,7 +54,15 @@ def setup(db, source, n):
         join g.nodes n on s.resource=n.nid""")
     db.execute("""create temp table access as select hop,tag,rid,sid,min(eid) eid from ports
         semi join shared using(rid) group by all""")
-    db.execute("create temp table subj as select distinct hop,tag,sid from m")
+    db.execute("""create temp table sp as select hop,tag,cid,uid,w,sid,'member' AS role,
+        NULL::BIGINT eid from m union all select m.hop,m.tag,m.cid,m.uid,m.w,n.native_nid,
+        e.op||'/'||e.direction,e.eid from m join t.actor e using(uid)
+        join g.nodes n on n.nid=e.a where n.kind='subject'""")
+    db.execute("create temp table subj as select distinct hop,tag,sid from sp")
+    db.execute("""create temp table sameproc as select distinct a.hop,a.tag a,b.tag b from
+        (select distinct hop,tag,cid,sid from sp) a join
+        (select distinct hop,tag,cid,sid from sp) b on a.hop=b.hop and a.sid=b.sid
+        and a.cid<>b.cid and a.tag<=b.tag""")
     db.execute("""create temp table rpair as select distinct a.hop,a.tag a,b.tag b from access a
         join access b on a.hop=b.hop and a.rid=b.rid and a.tag<=b.tag and a.sid<>b.sid""")
     db.execute("""create temp table ppair as select distinct a.hop,least(a.tag,b.tag) a,greatest(a.tag,b.tag) b
@@ -125,7 +133,7 @@ def main():
     output(args.out/'TOP_N_BEHAVIORS.csv','hop rank behavior_type frequency',ranking)
     ranks={(h,t):(r,f) for h,r,t,f in ranking}
     direct=defaultdict(set)
-    for h,a,b in db.execute('select * from rpair union select * from ppair').fetchall():
+    for h,a,b in db.execute('select * from rpair union select * from ppair union select * from sameproc').fetchall():
         direct[h].add((a,b))
     print('direct',[(h,len(direct[h])) for h in range(1,6)],flush=True)
     graphs,possible,subjects,anchors=linked_graphs(db)
