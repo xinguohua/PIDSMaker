@@ -4,7 +4,7 @@ from pathlib import Path
 from collections import Counter,defaultdict
 from action_composition import dump,write,ro
 from action_path_check import check_real_window
-from action_window import configure,window_results
+from action_window import configure,window_results,result_rows
 LENGTHS=(1,2,3,5)
 
 def paths(edges, memberships=False, groups=None):
@@ -119,13 +119,13 @@ def analyze(a):
   for audit,rows,node_flags,real in window_results(jobs,a.workers):
    w=audit['window'];start=time.monotonic()
    if real:dump(out/'REAL_PATH_CHECK.json',dict(window=w,**real))
-   counts.executemany(merge_sql,rows)
+   counts.executemany(merge_sql,result_rows(rows))
    counts.executemany("""insert into node_flags values(?,?,?) on conflict(k,id)
        do update set bits=bits|excluded.bits""", ((k,n,b) for (k,n),b in node_flags.items()))
    audit['write_s']=round(time.monotonic()-start,4)
    counts.execute('insert into window_done values(?,?)',(w,json.dumps(audit)))
    done.add(w);remaining-=1
-   if len(done)%12==0 or remaining==0 or len(rows)>200000:
+   if len(done)%12==0 or remaining==0 or sum(audit[f'types_{k}'] for k in LENGTHS)>200000:
     counts.commit()
     dump(root/'PROGRESS.json',dict(window=w,split=split,windows_done=len(done),last_window=audit))
     print('committed windows',len(done),split,flush=True)

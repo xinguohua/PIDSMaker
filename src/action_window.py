@@ -1,6 +1,10 @@
 """Independent native windows, one reader per process and one transactional result writer."""
 from collections import Counter, defaultdict
 import multiprocessing
+import pickle
+from contextlib import ExitStack
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import sqlite3
 import time
 
@@ -36,7 +40,7 @@ def independent_instance_counts(edges):
     return result
 
 
-def compute_one(job):
+def compute_one(job, spool_dir):
     w, split = job
     ctx = _context
     paths, check, pack = ctx['functions']
@@ -77,46 +81,75 @@ def compute_one(job):
     audit['same_order_extra_events']=len(good)-len(ordered_groups)
     flags = defaultdict(int)
     rows = []
-    for k, values in totals.items():
-        audit['types_' + str(k)] = len(values)
-        audit['instances_' + str(k)] = sum(value[0] for value in values.values())
-        assert audit['instances_' + str(k)] == exact_total[k-1]
-        unknown = 0
-        for seq, (n, witness, nodes) in values.items():
-            blob = pack(seq)
-            complete = ctx['missing'].isdisjoint(seq)
-            if not complete:
-                unknown += n
-            if test and k > 1:
+    spool_path = None
+    with ExitStack() as stack:
+        spool = None
+        if sum(map(len, totals.values())) > 200000:
+            spool_path = Path(spool_dir) / f'{w}.bin'
+            spool = stack.enter_context(spool_path.open('xb'))
+        for k, values in totals.items():
+            audit['types_' + str(k)] = len(values)
+            audit['instances_' + str(k)] = sum(value[0] for value in values.values())
+            assert audit['instances_' + str(k)] == exact_total[k-1]
+            unknown = 0
+            while values:
+                seq, (n, witness, nodes) = values.popitem()
+                blob = pack(seq)
+                complete = ctx['missing'].isdisjoint(seq)
                 if not complete:
-                    bit = 8
-                elif blob in ctx['train_types'][k]:
-                    bit = 1
-                else:
-                    bit = 2 if all(t in ctx['train_actions'] for t in seq) else 4
-                for node in nodes:
-                    flags[k, node] |= bit
-            rows.append((k, blob, '0' if test else str(n), str(n) if test else '0', w, pack(witness)))
-        audit['semantic_unknown_instances_' + str(k)] = unknown
+                    unknown += n
+                if test and k > 1:
+                    if not complete:
+                        bit = 8
+                    elif blob in ctx['train_types'][k]:
+                        bit = 1
+                    else:
+                        bit = 2 if all(t in ctx['train_actions'] for t in seq) else 4
+                    for node in nodes:
+                        flags[k, node] |= bit
+                rows.append((k, blob, '0' if test else str(n), str(n) if test else '0', w, pack(witness)))
+                if spool is not None and len(rows) == 8192:
+                    pickle.dump(rows, spool, protocol=5)
+                    rows.clear()
+            audit['semantic_unknown_instances_' + str(k)] = unknown
+        if spool is not None:
+            if rows:
+                pickle.dump(rows, spool, protocol=5)
+            pickle.dump(None, spool, protocol=5)
     audit.update(read_s=round(read-begin, 4), dp_and_oracle_s=round(dp_done-read, 4),
                  reduce_s=round(time.monotonic()-dp_done, 4))
-    return audit, rows, flags, real
+    return audit, (spool_path if spool_path is not None else rows), flags, real
 
 
 def window_results(jobs, workers):
     if not jobs:
         return
+    with TemporaryDirectory(prefix='action-windows-', dir=_context['root']) as spool_dir:
+        yield from _run_windows(jobs, workers, spool_dir)
+
+
+def result_rows(rows):
+    if isinstance(rows, list):
+        yield from rows
+        return
+    with rows.open('rb') as spool:
+        while (batch := pickle.load(spool)) is not None:
+            yield from batch
+    rows.unlink()
+
+
+def _run_windows(jobs, workers, spool_dir):
     # A single window is validated before the first parallel batch is started.
     if jobs[0][0] == 0:
         initialize()
-        yield compute_one(jobs[0])
+        yield compute_one(jobs[0], spool_dir)
         jobs = jobs[1:]
     if jobs:
         from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
         context = multiprocessing.get_context('fork')
         with ProcessPoolExecutor(max_workers=workers, mp_context=context, initializer=initialize) as pool:
             it = iter(jobs)
-            pending = {pool.submit(compute_one, job) for job in (jobs[:workers])}
+            pending = {pool.submit(compute_one, job, spool_dir) for job in (jobs[:workers])}
             for _ in range(len(pending)):
                 next(it)
             while pending:
@@ -125,4 +158,4 @@ def window_results(jobs, workers):
                     yield finished.pop().result()
                     job = next(it, None)
                     if job is not None:
-                        pending.add(pool.submit(compute_one, job))
+                        pending.add(pool.submit(compute_one, job, spool_dir))
