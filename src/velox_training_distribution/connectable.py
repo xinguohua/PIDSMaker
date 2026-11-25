@@ -64,7 +64,7 @@ def setup(db, source, n):
     db.execute("""create temp table sites as select i.uid,i.segment w,-1-i.resource z,
         n.native_nid rid,u.program,b.h from g.incidence i join g.nodes n on n.nid=i.resource
         join g.units u using(uid) join t.bundles b on b.uid=i.uid and b.a=i.resource and b.b is null
-        semi join shared using(rid)""")
+        semi join shared on shared.rid=n.native_nid""")
     db.execute("""create temp table donor_ports as select m.hop,m.tag,s.rid,s.program,s.h,
         min(m.uid) du from sites s join m using(uid) group by all""")
     db.execute("""create temp table ends as select d.hop,d.tag,s.uid,s.w,s.z,d.du from sites s
