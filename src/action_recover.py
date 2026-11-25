@@ -100,7 +100,7 @@ def recover(a):
             results.append(r)
     CONTEXT.clear()
     target=a.root/'semantic.sqlite'
-    out=sqlite3.connect(target)
+    out=sqlite3.connect(target.as_uri(),uri=True)
     out.execute('pragma cache_size=-262144')
     out.execute('pragma mmap_size=8589934592')
     out.execute('pragma temp_store=memory')
