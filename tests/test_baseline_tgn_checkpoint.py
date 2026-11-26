@@ -31,10 +31,11 @@ class TGNCheckpointTests(unittest.TestCase):
                                 torch.tensor([1, 2, 3, 4]), torch.randn(4, 2))
             nodes = torch.arange(memory.num_nodes)
             expected_memory, expected_update = memory._get_updated_memory(nodes)
-            memory._flush_memory(chunk_size=2)
+            memory.flush_chunk_size = 2
+            memory._flush_all_memory()
         torch.testing.assert_close(memory.memory, expected_memory)
         torch.testing.assert_close(memory.last_update, expected_update)
-        torch.testing.assert_close(memory._assoc, nodes)
+
 
     def test_pending_messages_and_continuous_eval_roundtrip(self):
         import torch

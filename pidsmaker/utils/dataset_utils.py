@@ -44,13 +44,6 @@ def uses_fork_vocabulary(cfg):
     return cfg.dataset.name == "CADETS_E3" and cfg.dataset.num_edge_types == 11
 
 
-def with_fork_event(events, cfg):
-    if not uses_fork_vocabulary(cfg):
-        return events
-    key = ("subject", "subject")
-    return {**events, key: [*events[key], "EVENT_FORK"]}
-
-
 def get_rel2id(cfg, from_zero=False):
     """Bidirectional {edge type: id, id: edge type} vocabulary of the graphs of the dataset."""
     rel2id = get_schema(cfg).rel2id

@@ -47,9 +47,10 @@ def git(*args):
 
 def protocol():
     tree = ast.parse((ROOT / 'pidsmaker/config/config.py').read_text())
-    data = ast.literal_eval(next(n.value for n in tree.body if isinstance(n, ast.Assign)
-                           and any(isinstance(t, ast.Name) and t.id == 'DATASET_DEFAULT_CONFIG' for t in n.targets)))
-    return {k: data[k] for k in DATASETS}
+    data = next(n.value for n in tree.body if isinstance(n, ast.Assign)
+                           and any(isinstance(t, ast.Name) and t.id == 'DATASET_DEFAULT_CONFIG' for t in n.targets))
+    return {key.value: ast.literal_eval(value) for key, value in zip(data.keys, data.values)
+            if key.value in DATASETS}
 
 
 def matrix():

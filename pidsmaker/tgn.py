@@ -368,31 +368,17 @@ class TGNMemory(torch.nn.Module):
 
         return msg, t, src, dst
 
-    @torch.no_grad()
-    def _flush_memory(self, chunk_size: int = 16384):
-        # Messages can reference nodes in another chunk. All chunks must read
-        # the same pre-flush memory and timestamps, including nodes with no messages.
-        next_memory = torch.empty_like(self.memory)
-        next_update = torch.empty_like(self.last_update)
-        for start in range(0, self.num_nodes, chunk_size):
-            end = min(start + chunk_size, self.num_nodes)
-            nodes = torch.arange(start, end, device=self.memory.device)
-            next_memory[start:end], next_update[start:end] = self._get_updated_memory(nodes)
-            self._assoc[start:end] = nodes  # same final mapping as the all-node update
-        self.memory.copy_(next_memory)
-        self.last_update.copy_(next_update)
-
     def train(self, mode: bool = True):
         """Sets the module in training mode."""
         if self.training and not mode:
-            self._flush_memory()
+            self._flush_all_memory()
             self._reset_message_store()
         super().train(mode)
 
     # Nodes whose memory is updated at once when flushing the message store: the aggregated
     # messages of all the nodes of TRACE_E3 (44.5M) take 56 GB of GPU memory, and the update
     # of 2M nodes peaks at 12 GB with Kairos (250K nodes: 1.5 GB, at a similar speed).
-    flush_chunk_size = 250_000
+    flush_chunk_size = 16_384
 
     def _flush_all_memory(self):
         """Updates the memory of all nodes, as `_update_memory` on all nodes, in chunks of nodes.

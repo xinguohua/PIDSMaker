@@ -79,7 +79,7 @@ def run(cell, out, arrow_python):
     tensors=sorted(train.iterdir())
     names={p.name for date in dates for p in (graphs/('graph_'+date)).iterdir()}
     assert names=={p.name.removesuffix('.TemporalData.simple') for p in tensors}
-    node_types=get_node_map(cfg)
+    node_types=get_node_map(cfg) if hasattr(cfg.dataset, "schema") else get_node_map()
     relation_ids=get_rel2id(cfg)
     width=cfg.dataset.num_node_types+cfg.featurization.emb_dim
     classes=cfg.dataset.num_edge_types
@@ -103,6 +103,9 @@ def run(cell, out, arrow_python):
             graph=torch.load(graph_file,map_location='cpu')
             assert graph.is_directed() and graph.is_multigraph()
             data=load_feature_data(tensor_file).to('cpu')
+            if 'msg_node_feats' in data:
+                from pidsmaker.utils.data_utils import expand_compact_msg
+                data=expand_compact_msg(data)
             assert set(data.keys())=={'src','dst','t','msg','y','tgn_mode'}
             assert not data.tgn_mode
             n=data.src.numel()

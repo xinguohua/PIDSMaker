@@ -24,6 +24,7 @@ def graph_source_hashes(root):
             raise ValueError(f'Missing graph source directory: {package/folder}')
     paths.update(p for p in (package/'preprocessing').rglob('*')
                  if p.is_file() and p.suffix in {'.py', '.yml', '.yaml'})
+    paths.update(p for name in ('config/schemas.py', 'utils/graph_store.py') if (p := package/name).is_file())
     return {str(p.relative_to(root)):digest(p) for p in sorted(paths)}
 
 
