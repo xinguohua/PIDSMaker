@@ -845,7 +845,7 @@ def main(cfg):
                 cur.execute(events_sql(get_schema(cfg)).strip().rstrip(";") + " LIMIT 4096", (start, stop))
                 smoke_events[date] = cur.fetchall()
         conn.close()
-        smoke_node_ids = sorted({n for rows in smoke_events.values() for r in rows for n in (r[1], r[4])})
+        smoke_node_ids = sorted({int(n) for rows in smoke_events.values() for r in rows for n in (r[1], r[4])})
         os.makedirs(cfg.construction._task_path, exist_ok=True)
         with open(os.path.join(cfg.construction._task_path, 'smoke_input.json'), 'w') as f:
             json.dump({'limit_per_date':4096, 'dates':{d:{'rows':len(rows),'first_timestamp':rows[0][6] if rows else None,'last_timestamp':rows[-1][6] if rows else None} for d,rows in smoke_events.items()}, 'node_ids':smoke_node_ids, 'scope':'bounded native smoke; not full split coverage'}, f)
