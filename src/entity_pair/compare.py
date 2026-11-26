@@ -96,12 +96,12 @@ def main(run,source,first,second,out):
     for r in node_peaks.itertuples():
         k=r.src,r.dst;hist=h.get(k,{});n=sum(hist.values());wrong=r.op!=r.guess
         byte_match=seen(k,r.vec_src,r.vec_dst)
-        ambiguous=int(r.input_ops or 0)>1
+        ambiguous=float(r.input_ops or 0)>1
         records.append(dict(node=r.node,src=r.src,dst=r.dst,op=r.op,guess=r.guess,FP=int(r.prediction),N=n,
                             pair_unseen=n==0,operation_unseen=n>0 and r.n==0,within_pair_nonmode=0<r.n<r.maximum,
                             low_seen_pair=0<n<100,pair_mode=r.n>0 and r.n==r.maximum,sole_true=len(hist)==1 and r.n>0,
                             seen_pair_new_input=n>0 and not byte_match,global_input_ambiguous=ambiguous,
-                            same_input_unambiguous_wrong=byte_match and wrong and int(r.input_ops or 0)==1 and float(r.input_true_n or 0)>0,
+                            same_input_unambiguous_wrong=byte_match and wrong and float(r.input_ops or 0)==1 and float(r.input_true_n or 0)>0,
                             same_pair_input=byte_match))
     nodes=pd.DataFrame(records)
     rates=nodes.groupby('FP').sum(numeric_only=True).T
