@@ -37,7 +37,7 @@ def extract(cell, out):
     p = pd.DataFrame(json.loads(line) for line in (corrected/'objects.jsonl').open()).set_index('node_id')
     assert p.index.is_unique and (p.prediction == (p.score > THRESHOLD)).all()
     assert (p.threshold == THRESHOLD).all() and (p.scope == 'retrospective_test').all()
-    normal = p[p.gt == 0]
+    normal = p[p['gt'] == 0]
     assert normal.prediction.value_counts().to_dict() == {0:286686,1:172}
     p.to_pickle(out/'pred.pkl')
     audit = dict(run=run.name,commit=meta['commit'],config_sha256=meta['config_sha256'],seed=meta['seed'],
