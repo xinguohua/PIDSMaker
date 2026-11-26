@@ -80,6 +80,10 @@ def run(args):
     assert set(windows) <= {w for w, in counts.execute('select w from window_done')}
     def groups(w):
         return read_window(db,w,True,attrs,keys,preds,attack)[0]
+    if args.peak_window_nodes:
+        from peak_window_nodes import classify
+        classify(args.peak_window_nodes,preds,groups,counts,db,out)
+        return
     if args.ending_at_peaks:
         from peak_ending_paths import classify
         classify(args.ending_at_peaks,preds,groups,counts,db,out)
@@ -217,6 +221,7 @@ if __name__=='__main__':
     p.add_argument('--lengths',type=int,nargs='+',choices=(2,3),default=[2,3])
     p.add_argument('--constituent-groups',action='store_true',help='Break down zero-shot node membership by constituent training support')
     p.add_argument('--node-breakdown-only',action='store_true',help='Export FP memberships and denominators for labels with false positives')
+    p.add_argument('--peak-window-nodes',type=Path,help='Classify all exact-length paths touching the FP node in each peak window')
     p.add_argument('--ending-at-peaks',type=Path,help='Classify paths completed by each FP peak event')
     p.add_argument('--peak-rows',type=Path)
     p.add_argument('--fp-memberships',type=Path)
