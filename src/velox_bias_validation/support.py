@@ -38,18 +38,18 @@ def main():
    witness.append(dict(src=s,dst=d,op=o,count=n,relative=n/maxima[s,d],native_edge=row,raw_record=db.execute('select * from raw_events where uuid=?',(row[6],)).fetchone()))
  save(out/'source_audit.json',dict(all_40155_counts_equal=True,training_edges=3426589,training_windows=581,training_batches=3665,witnesses=witness,four_groups=pd.read_csv(root/'tdsc-runs/velox-local-condition-exp1-20261126a/output/four_groups.csv').query("scope=='multi' and threshold==0.1").to_dict('records')))
  print('Stage 1 source audit saved',flush=True)
- losses=defaultdict(deque);files=sorted((Path(cfg['training']['_edge_losses_dir'])/'test'/'model_epoch_11').glob('*.csv'));lossrows=0
- for f in files:
-  for loss,u,v,ns,op in pd.read_csv(f).itertuples(index=False,name=None):losses[(u,v,ns,'EVENT_'+OPS[int(op)-1])].append(float(loss));lossrows+=1
- print('Loaded losses',lossrows,flush=True)
+ files=sorted((Path(cfg['training']['_edge_losses_dir'])/'test'/'model_epoch_11').glob('*.csv'),key=lambda f:int(f.stem.rsplit('_b',1)[1]));lossrows=0
+ assert [int(f.stem.rsplit('_b',1)[1]) for f in files]==list(range(len(files)))
+ batches=iter(files)
  result=sqlite3.connect(out/'events.sqlite');result.execute('create table events(w int,row int,u int,v int,ns int,op text,uuid text,y int,loss real,normal int,support_n int,support_max int,bin text,primary key(w,row))')
- peak={};ties=defaultdict(list);rates=defaultdict(lambda:[0,0]);exclude=Counter();testrows=0;dupkeys=sum(len(v)>1 for v in losses.values());ambiguous=0
+ peak={};ties=defaultdict(list);rates=defaultdict(lambda:[0,0]);exclude=Counter();testrows=0;dupkeys=0;ambiguous=0
  for w, in db.execute("select w from windows where split='test' order by w"):
-  batch=[]
+  batch=[];window_n=db.execute('select n from windows where w=?',(w,)).fetchone()[0];window_losses=[]
+  for start in range(0,window_n,1024):
+   f=next(batches);rows=list(pd.read_csv(f).itertuples(index=False,name=None));assert len(rows)==min(1024,window_n-start);window_losses.extend(rows)
+  lossrows+=len(window_losses)
   for w,r,u,v,ns,op,uid,y in db.execute('select * from edges where w=? order by row',(w,)):
-   key=(u,v,ns,op);ls=losses[key];assert ls,key
-   if len(set(ls))>1:ambiguous+=1
-   loss=ls.popleft();c=(labels[u],labels[v]);n=support.get((*c,op),0);m=maxima.get(c,0);b=bucket(n,m)
+   loss,lu,lv,lt,lo=window_losses[r];assert (u,v,ns,op)==(lu,lv,lt,'EVENT_'+OPS[int(lo)-1]);c=(labels[u],labels[v]);n=support.get((*c,op),0);m=maxima.get(c,0);b=bucket(n,m)
    benign=y==0 and u in normal and v in normal
    exclude['y0' if y==0 else 'y1']+=1
    if y==0 and not benign:exclude['y0_not_both_scored_gt0']+=1
@@ -60,7 +60,7 @@ def main():
     elif loss==old[0]:ties[node].append((w,r,b))
    batch.append((w,r,u,v,ns,op,uid,y,loss,int(benign),n,m,b))
   result.executemany('insert into events values(?,?,?,?,?,?,?,?,?,?,?,?,?)',batch);result.commit();testrows+=len(batch)
- assert sum(len(x) for x in losses.values())==0 and testrows==lossrows
+ assert next(batches,None) is None and testrows==lossrows
  assert set(peak)==normal
  err=max(abs(peak[n][0]-pred[n][1]) for n in normal);assert err<1e-6,err
  counts=Counter();tie_cross=Counter()
@@ -70,7 +70,7 @@ def main():
    group='FP' if pred[n][1]>T else 'TN';loss,w,r,b,x,m=peak[n];counts[group,b]+=1;wr.writerow([n,group,loss,w,r,b,x,m,len(ties[n])])
    for w,r,b in ties[n]:tw.writerow([n,group,w,r,b])
    if len({b for w,r,b in ties[n]})>1:tie_cross[group]+=1
- summary=dict(node_bins=[dict(bin=b,FP=counts['FP',b],TN=counts['TN',b]) for b in BINS],normal_event_rates=[dict(bin=b,events=rates[b][0],high_loss=rates[b][1],rate=rates[b][1]/rates[b][0] if rates[b][0] else None) for b in BINS],normal_nodes=len(normal),scored_events=testrows,normal_events=sum(v[0] for v in rates.values()),exclusions=dict(exclude),peak_score_max_error=err,tie_cross_bins=dict(tie_cross),all_fp_peak_ties=sum(len(ties[n]) for n in normal if pred[n][1]>T),duplicate_loss_keys=dupkeys,ambiguous_duplicate_loss_rows=ambiguous,elapsed_seconds=time.time()-start)
+ summary=dict(node_bins=[dict(bin=b,FP=counts['FP',b],TN=counts['TN',b]) for b in BINS],normal_event_rates=[dict(bin=b,events=rates[b][0],high_loss=rates[b][1],rate=rates[b][1]/rates[b][0] if rates[b][0] else None) for b in BINS],normal_nodes=len(normal),scored_events=testrows,normal_events=sum(v[0] for v in rates.values()),exclusions=dict(exclude),peak_score_max_error=err,tie_cross_bins=dict(tie_cross),all_fp_peak_ties=sum(len(ties[n]) for n in normal if pred[n][1]>T),binding="stable filename batch ID plus CSV row; all endpoints/time/op checked",scored_batches=len(files),elapsed_seconds=time.time()-start)
  assert ambiguous==0
  assert dbpath.stat().st_mtime_ns==stat.st_mtime_ns
  save(out/'summary.json',summary);print(json.dumps(summary,indent=2),flush=True)
