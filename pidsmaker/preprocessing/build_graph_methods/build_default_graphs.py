@@ -293,8 +293,17 @@ def gen_edge_fused_tw(indexid2msg, cfg, cleaner=None, smoke_events=None):
     # In test mode, we ensure to get 1 TW in each set
     dates = get_dates_from_cfg(cfg)
 
-    def _to_ns(value):
-        return datetime_to_ns_time_US(value, timezone=cfg.dataset.timezone or "US/Eastern")
+    # Timezone-aware timestamp conversion: UTC for datasets with timezone=UTC, else US/Eastern
+    _tz = getattr(cfg.dataset, "timezone", None)
+    if _tz and _tz.upper() == "UTC":
+        import pytz as _pytz
+        _utc = _pytz.utc
+        def _to_ns(date_str):
+            dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+            dt = _utc.localize(dt)
+            return int(dt.timestamp() * 1_000_000_000)
+    else:
+        _to_ns = datetime_to_ns_time_US
 
     log("Building graphs...")
     for date in dates:
@@ -329,7 +338,7 @@ def gen_edge_fused_tw(indexid2msg, cfg, cleaner=None, smoke_events=None):
             sql = """
             select * from event_table
             where
-                  timestamp_rec >= %s and timestamp_rec < %s
+                  timestamp_rec > %s and timestamp_rec < %s
                    ORDER BY timestamp_rec, event_uuid;
             """
             sql_params = (start_ns_timestamp, end_ns_timestamp)
@@ -606,11 +615,9 @@ def main(cfg):
         with conn.cursor() as cur:
             cur.execute("SET statement_timeout='120s'; SET temp_file_limit='256MB'")
             for date in get_dates_from_cfg(cfg):
-                zone = cfg.dataset.timezone or "US/Eastern"
-                next_day = datetime.fromisoformat(date) + timedelta(days=1)
-                start = datetime_to_ns_time_US(f"{date} 00:00:00", timezone=zone)
-                stop = datetime_to_ns_time_US(f"{next_day:%Y-%m-%d} 00:00:00", timezone=zone)
-                cur.execute("SELECT * FROM event_table WHERE timestamp_rec >= %s AND timestamp_rec < %s ORDER BY timestamp_rec,event_uuid LIMIT 4096", (start, stop))
+                start = datetime_to_ns_time_US(f"{date} 00:00:00")
+                stop = start + 86400 * 1_000_000_000
+                cur.execute("SELECT * FROM event_table WHERE timestamp_rec > %s AND timestamp_rec < %s ORDER BY timestamp_rec,event_uuid LIMIT 4096", (start, stop))
                 smoke_events[date] = cur.fetchall()
         conn.close()
         smoke_node_ids = sorted({n for rows in smoke_events.values() for r in rows for n in (r[1], r[4])})
