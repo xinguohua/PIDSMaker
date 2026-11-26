@@ -15,7 +15,7 @@ for r in x['witnesses']:
  assert unbox(raw['subject'])==actor and unbox(raw['predicateObject'])==obj
  endpoints={native.execute('select uuid from nodes where id=?',(i,)).fetchone()[0] for i in (u,v)}
  assert endpoints=={actor,obj}
- old=r.pop('raw_record');r['uuid_only_lookup_matches']=old is not None and old[1]==ns and old[5]==op
+ old=r.pop('raw_record',None) or r.pop('unverified_uuid_only_candidate',None);r['uuid_only_lookup_matches']=old is not None and old[1]==ns and old[5]==op
  r['verified_raw_source']={'binding':source,'record':raw,'checks':'UUID, exact integer timestamp, operation, actor/object UUIDs and native endpoints all match'}
 x['raw_source_warning']='native.sqlite raw_events indexed only by UUID can select a different reused UUID. Use semantic.sqlite source(w,row); read exact raw file offset and validate.'
 out=Path(os.environ['RUN_OUTPUT_DIR']);(out/'source_audit.json').write_text(json.dumps(x,indent=2,ensure_ascii=False));print(json.dumps({'witnesses_verified':len(x['witnesses']),'uuid_only_mismatches':sum(not r['uuid_only_lookup_matches'] for r in x['witnesses'])}))

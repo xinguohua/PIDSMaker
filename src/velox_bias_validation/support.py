@@ -35,7 +35,7 @@ def main():
  for dst in ['subject None sh','subject None sshd']:
   for s,d,o,n,k in train[(train.src_label=='file None')&(train.dst_label==dst)].itertuples(index=False,name=None):
    w,r=divmod(k,1000000000);row=db.execute('select * from edges where w=? and row=?',(w,r)).fetchone()
-   witness.append(dict(src=s,dst=d,op=o,count=n,relative=n/maxima[s,d],native_edge=row,raw_record=db.execute('select * from raw_events where uuid=?',(row[6],)).fetchone()))
+   witness.append(dict(src=s,dst=d,op=o,count=n,relative=n/maxima[s,d],native_edge=row,unverified_uuid_only_candidate=db.execute('select * from raw_events where uuid=?',(row[6],)).fetchone()))
  save(out/'source_audit.json',dict(all_40155_counts_equal=True,training_edges=3426589,training_windows=581,training_batches=3665,witnesses=witness,four_groups=pd.read_csv(root/'tdsc-runs/velox-local-condition-exp1-20261126a/output/four_groups.csv').query("scope=='multi' and threshold==0.1").to_dict('records')))
  print('Stage 1 source audit saved',flush=True)
  files=sorted((Path(cfg['training']['_edge_losses_dir'])/'test'/'model_epoch_11').glob('*.csv'),key=lambda f:int(f.stem.rsplit('_b',1)[1]));lossrows=0
@@ -45,8 +45,8 @@ def main():
  peak={};ties=defaultdict(list);rates=defaultdict(lambda:[0,0]);exclude=Counter();testrows=0;dupkeys=0;ambiguous=0
  for w, in db.execute("select w from windows where split='test' order by w"):
   batch=[];window_n=db.execute('select n from windows where w=?',(w,)).fetchone()[0];window_losses=[]
-  for start in range(0,window_n,1024):
-   f=next(batches);rows=list(pd.read_csv(f).itertuples(index=False,name=None));assert len(rows)==min(1024,window_n-start);window_losses.extend(rows)
+  for batch_start in range(0,window_n,1024):
+   f=next(batches);rows=list(pd.read_csv(f).itertuples(index=False,name=None));assert len(rows)==min(1024,window_n-batch_start);window_losses.extend(rows)
   lossrows+=len(window_losses)
   for w,r,u,v,ns,op,uid,y in db.execute('select * from edges where w=? order by row',(w,)):
    loss,lu,lv,lt,lo=window_losses[r];assert (u,v,ns,op)==(lu,lv,lt,'EVENT_'+OPS[int(lo)-1]);c=(labels[u],labels[v]);n=support.get((*c,op),0);m=maxima.get(c,0);b=bucket(n,m)
