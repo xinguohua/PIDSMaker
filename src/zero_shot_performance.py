@@ -119,6 +119,28 @@ def run(args):
             writer.writeheader()
             writer.writerows(rows)
     save('RQ1_Exp3_Node_Group_Statistics.csv',node_rows)
+    if args.node_breakdown_only:
+        names = {0:'Outside',1:'Seen-only',2:'Zero-shot-only',3:'Both'}
+        profile = defaultdict(Counter)
+        errors = []
+        kinds = {n:(kind,label) for n,kind,label in db.execute('select id,kind,label from nodes')}
+        for n,(gt,fp) in preds.items():
+            if gt:
+                continue
+            kind,label = kinds.get(n,('unmapped',''))
+            strata = {k:names[flags[k].get(n,0)] for k in args.lengths}
+            for k,group in strata.items():
+                row = profile[k,group,kind,label]
+                row['nodes'] += 1
+                row['FP'] += fp
+            if fp:
+                errors.append(dict(node_id=n,kind=kind,native_label=label,
+                                   **{f'length_{k}':group for k,group in strata.items()}))
+        save('FP_group_membership.csv',errors)
+        save('FP_group_label_counts.csv',[
+            dict(length=k,group=g,kind=kind,native_label=label,nodes=v['nodes'],FP=v['FP'])
+            for (k,g,kind,label),v in profile.items() if v['FP']])
+        return
     # For a node stratum count every instance touching it once. Subtract paths
     # wholly inside the complement via compressed within-window counting.
     scratch=sqlite3.connect(Path(os.environ.get('TMPDIR', str(out.parent)))/('monochrome-'+out.parent.name+'.sqlite'))
@@ -163,4 +185,5 @@ if __name__=='__main__':
     p.add_argument('--dataset',required=True)
     p.add_argument('--detector',required=True)
     p.add_argument('--lengths',type=int,nargs='+',choices=(2,3),default=[2,3])
+    p.add_argument('--node-breakdown-only',action='store_true',help='Export FP memberships and denominators for labels with false positives')
     run(p.parse_args())
