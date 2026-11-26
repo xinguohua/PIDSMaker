@@ -11,22 +11,23 @@ Handles model training with:
 
 import copy
 import os
-import tracemalloc
 from time import perf_counter as timer
 
 import numpy as np
 import torch
 import wandb
 
+from pidsmaker.detection.flash_detection import flash_snapshot_ensemble
 from pidsmaker.factory import (
     build_model,
     early_stop_tracker_factory,
     optimizer_factory,
     optimizer_few_shot_factory,
 )
+from pidsmaker.objectives.predict_node_type import NODE_LOSS_MASK_KEY
 from pidsmaker.tasks.batching import get_preprocessed_graphs
-from pidsmaker.utils.data_utils import save_model
-from pidsmaker.utils.utils import get_device, log, log_start, log_tqdm, set_seed
+from pidsmaker.utils.data_utils import batch_to_device, save_model
+from pidsmaker.utils.utils import PeakCPUMemory, get_device, log, log_start, log_tqdm, set_seed
 
 from . import inference_loop
 
@@ -53,7 +54,7 @@ def main(cfg):
     # Reset the peak memory usage counter
     if use_cuda:
         torch.cuda.reset_peak_memory_stats(device=device)
-    tracemalloc.start()
+    cpu_mem = PeakCPUMemory()
 
     train_data, val_data, test_data, max_node_num = get_preprocessed_graphs(cfg)
     log("Graph data loaded.")
@@ -120,60 +121,73 @@ def main(cfg):
     if use_few_shot:
         num_epochs += 1  # in few-shot, the first epoch is without ssl training
 
+    # FLASH: a sequence of GNN snapshots, each trained on the nodes still misclassified
+    model.flash_ensemble = flash_snapshot_ensemble(cfg)
+
     for epoch in range(0, num_epochs):
         best_val_score, best_model, best_epoch = float("-inf"), None, None
 
         if not cfg._from_weights and (not use_few_shot or (use_few_shot and epoch > 0)):
             start = timer()
-            tracemalloc.start()
+            cpu_mem.start()
 
             # Before each epoch, we reset the memory
             model.reset_state()
             model.to_fine_tuning(False)
 
+            # Sum of the losses of the batches since the last optimizer step (without autograd
+            # graph). Each batch is backpropagated right away and its gradients accumulate in
+            # `.grad` until the step: the gradients are those of the summed losses, while only
+            # the autograd graph of one batch is kept in memory (with `grad_accumulation` = N,
+            # backpropagating the sum kept the graphs of N batches, e.g. of all the graphs of
+            # the training set with OCR-APT).
             loss_acc = torch.zeros(1, device=device)
-            tot_loss = 0
+            # Accumulated on device to avoid a GPU->CPU sync at each batch
+            tot_loss = torch.zeros((), dtype=torch.float64, device=device)
+            model.train()
+            optimizer.zero_grad()
             for dataset in train_data:
                 for i, g in enumerate(log_tqdm(dataset, "Training")):
-                    g.to(device=device)
-                    g = remove_attacks_if_needed(g, cfg)
-
-                    model.train()
-                    optimizer.zero_grad()
+                    node_loss_mask = getattr(g, NODE_LOSS_MASK_KEY, None)
+                    if node_loss_mask is not None and not node_loss_mask.any():
+                        continue  # No node left to train on (FLASH: all learned by the snapshots)
+                    g = to_device_without_attacks(g, cfg, device)
 
                     results = model(g)
                     loss = results["loss"]
-                    loss_acc += loss
-                    tot_loss += loss.item()
+                    # A batch without any trainable output (e.g. a graph of OCR-APT with no
+                    # node to predict) gives a constant loss, which contributes no gradient
+                    if loss.requires_grad:
+                        loss.sum().backward()
+                    loss_acc += loss.detach()
+                    tot_loss += loss.detach().sum().double()
 
                     if (i + 1) % grad_acc == 0:
-                        loss_acc.backward()
                         if stable_optim:
                             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                         optimizer.step()
                         if scheduler is not None:
                             scheduler.step()
+                        optimizer.zero_grad()
                         loss_acc = torch.zeros(1, device=device)
 
-                    g.to("cpu")
-                    if use_cuda:
-                        torch.cuda.empty_cache()
+                    del g, results, loss
 
                 # Last batch
                 if loss_acc > 0:
-                    loss_acc.backward()
                     if stable_optim:
                         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                     optimizer.step()
                     if scheduler is not None:
                         scheduler.step()
 
-            tot_loss /= sum(len(dataset) for dataset in train_data)
+            if model.flash_ensemble is not None:
+                model.flash_ensemble.after_epoch(model, train_data, device)
+
+            tot_loss = tot_loss.item() / sum(len(dataset) for dataset in train_data)
             epoch_times.append(timer() - start)
 
-            _, peak_inference_cpu_memory = tracemalloc.get_traced_memory()
-            peak_train_cpu_mem = max(peak_train_cpu_mem, peak_inference_cpu_memory / (1024**3))
-            tracemalloc.stop()
+            peak_train_cpu_mem = max(peak_train_cpu_mem, cpu_mem.peak_gb())
 
             if use_cuda:
                 peak_inference_gpu_memory = torch.cuda.max_memory_allocated(device=device) / (
@@ -201,9 +215,9 @@ def main(cfg):
                 loss_acc = torch.zeros(1, device=device)
                 tot_loss = 0
                 for dataset in train_data:
-                    for g in log_tqdm(dataset, "Fine-tuning"):
+                    for i, g in enumerate(log_tqdm(dataset, "Fine-tuning")):
                         if 1 in g.y:
-                            g.to(device=device)
+                            g = batch_to_device(g, device)
 
                             model.train()
                             optimizer.zero_grad()
@@ -217,10 +231,6 @@ def main(cfg):
                                 loss_acc.backward()
                                 optimizer.step()
                                 loss_acc = torch.zeros(1, device=device)
-
-                            g.to("cpu")
-                            if use_cuda:
-                                torch.cuda.empty_cache()
 
                     # Last batch
                     if loss_acc > 0:
@@ -285,6 +295,7 @@ def main(cfg):
                 model=model,
                 val_data=val_data,
                 test_data=test_data,
+                train_data=train_data,
                 epoch=epoch,
                 split="all",
             )
@@ -311,6 +322,7 @@ def main(cfg):
             model=model,
             val_data=val_data,
             test_data=test_data,
+            train_data=train_data,
             epoch=best_epoch,
             split="test",
         )
@@ -335,6 +347,27 @@ def main(cfg):
     )
 
     return best_val_score
+
+
+def to_device_without_attacks(graph, cfg, device):
+    """Copies `graph` to `device`, without its attack edges if they are excluded from the
+    self-supervised training (see `remove_attacks_if_needed`).
+
+    The CPU graph is not mutated, and whether it has attacks to remove is checked on it, to
+    avoid a GPU sync at each batch.
+    """
+    has_attacks_to_remove = needs_attack_removal(graph, cfg)
+    graph = batch_to_device(graph, device)
+    if has_attacks_to_remove:
+        graph = remove_attacks_if_needed(graph, cfg)
+    return graph
+
+
+def needs_attack_removal(graph, cfg):
+    """Whether `remove_attacks_if_needed` would remove edges from `graph`."""
+    return (not cfg.training.decoder.few_shot.include_attacks_in_ssl_training) and bool(
+        (graph.y == 1).any()
+    )
 
 
 def remove_attacks_if_needed(graph, cfg):

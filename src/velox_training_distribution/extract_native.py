@@ -79,7 +79,7 @@ def run(cell, out, arrow_python):
     tensors=sorted(train.iterdir())
     names={p.name for date in dates for p in (graphs/('graph_'+date)).iterdir()}
     assert names=={p.name.removesuffix('.TemporalData.simple') for p in tensors}
-    node_types=get_node_map()
+    node_types=get_node_map(cfg)
     relation_ids=get_rel2id(cfg)
     width=cfg.dataset.num_node_types+cfg.featurization.emb_dim
     classes=cfg.dataset.num_edge_types

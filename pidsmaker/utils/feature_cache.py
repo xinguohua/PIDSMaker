@@ -3,7 +3,7 @@ import torch
 
 
 def save_feature_data(data, path, cache_format='dense', edge_width=None):
-    if cache_format == 'dense':
+    if cache_format == 'dense' or (cache_format == 'node_table_v1' and 'msg_node_feats' in data):
         torch.save(data, path)
         return
     if cache_format != 'node_table_v1':

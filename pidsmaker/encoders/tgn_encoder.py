@@ -69,13 +69,18 @@ class TGNEncoder(nn.Module):
             )
 
     def forward(self, batch, inference=False, **kwargs):
+        # First batch of a day with `tgn_last_neighbor.reset_state_every_day`
+        if getattr(batch, "reset_tgn_state", False) and (self.use_memory or self.use_time_enc):
+            self.memory.reset_state()
+
         n_id = batch.n_id_tgn  # NOTE: this one may need to be updated with no __inc__, or memory is get for unknown nodes
         edge_index = batch.edge_index_tgn
-        x = batch.x_tgn
+        # Not built when unused (with memory and without `use_node_feats_in_gnn`)
+        x = getattr(batch, "x_tgn", None)
 
         # NOTE: these are shape (N,) not (E,)
-        x_s = batch.x_from_tgn
-        x_d = batch.x_to_tgn
+        x_s = getattr(batch, "x_from_tgn", None)
+        x_d = getattr(batch, "x_to_tgn", None)
 
         x_proj = None
         if (not self.use_memory) or self.use_node_feats_in_gnn:
@@ -100,6 +105,8 @@ class TGNEncoder(nn.Module):
             edge_feats.append(batch.edge_type_tgn)
         if "msg" in self.edge_features:
             edge_feats.append(batch.msg_tgn)
+        if "edge_attrs" in self.edge_features:
+            edge_feats.append(batch.edge_attr_feats_tgn)
         if "time_encoding" in self.edge_features:  # or self.use_time_enc
             if not self.use_memory:
                 last_update = self.memory.get_last_update(n_id)
@@ -151,6 +158,9 @@ class TGNEncoder(nn.Module):
         if self.use_residual_norm:
             h = self.norm_local(self.dropout(h) + self.residual_proj(x_proj))
         
+        if "neg_dst_tgn" in batch:
+            # Embeddings of the negative destinations of the edges (`negative_destinations`)
+            batch.h_neg_tgn = h[batch.neg_dst_tgn]
         h_src = h[batch.reindexed_edge_index_tgn[0]]
         h_dst = h[batch.reindexed_edge_index_tgn[1]]
             
@@ -159,7 +169,12 @@ class TGNEncoder(nn.Module):
     
         # Update memory and neighbor loader with ground-truth state.
         if self.use_memory or self.use_time_enc:
-            self.memory.update_state(batch.src, batch.dst, batch.t, batch.msg)
+            # The raw message is only used by the TGN memory (TimeEncodingMemory ignores it,
+            # and `msg` is not kept in the batches when unused)
+            raw_msg = batch.msg if self.use_memory else None
+            # The nodes of the edges, computed in the batching (`torch.unique` waits for the GPU)
+            n_id_edges = None if "neg_dst_tgn" in batch else getattr(batch, "original_n_id", None)
+            self.memory.update_state(batch.src, batch.dst, batch.t, raw_msg, n_id=n_id_edges)
 
         # Detaching memory is only useful for backprop in training
         if self.use_memory and not inference:

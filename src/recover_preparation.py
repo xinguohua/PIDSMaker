@@ -21,7 +21,7 @@ def main():
         rr=[r for r in rows if r['split']==split];assert rr
         totals[split]={'windows':len(rr),**{k:sum(r[k] for r in rr) for k in ('input_events_after_type_filter','events_after_dedup','nodes','edges','bytes')}}
     edges=max(v for v in get_rel2id(cfg).values() if type(v) is int)
-    nodes=max(v for v in get_node_map().values() if type(v) is int)
+    nodes=max(v for v in get_node_map(cfg).values() if type(v) is int)
     capacity=dense_tensor_capacity(cfg.featurization,sum(r['edges'] for r in rows),nodes,edges,get_num_edge_type(cfg))
     report={'state':'preparation_complete_pending_capacity','time':now(),'cell':str(cell),'splits':totals,**capacity,'edge_types':edges,'node_types':nodes,'free_bytes':shutil.disk_usage(cell).free,'recovery_commit':git('rev-parse','HEAD'),'original_status':json.loads((cell/'status.json').read_text()),'graphs_rebuilt':False}
     save(cell/'preparation_recovery.json',report)

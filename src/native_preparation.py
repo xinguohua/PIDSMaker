@@ -62,7 +62,7 @@ def prepare_native(cfg,cell,out,main):
         total_edges=sum(r['edges'] for r in rows)
         # Exact native dense tensor dimensions; serialization/CSV/model overhead separate.
         from pidsmaker.utils.dataset_utils import get_rel2id,get_node_map,get_num_edge_type
-        edge_types=max(v for v in get_rel2id(cfg).values() if type(v) is int);node_types=max(v for v in get_node_map().values() if type(v) is int)
+        edge_types=max(v for v in get_rel2id(cfg).values() if type(v) is int);node_types=max(v for v in get_node_map(cfg).values() if type(v) is int)
         bins = get_num_edge_type(cfg) if cfg.featurization.used_method.strip() == 'ocrapt_features' else None
         capacity = dense_tensor_capacity(cfg.featurization, total_edges, node_types, edge_types, bins)
         report={'state':'preparation_complete_pending_capacity','time':now(),'cell':str(cell),'splits':totals,'windows_ledger':str(ledger),**capacity,'edge_types':edge_types,'node_types':node_types,'capacity_note':'Tensor payload uses prepared edge counts and the native feature layout. It excludes serialization overhead, fitted feature models, predictions and checkpoints. A null value denotes an unknown layout.','free_bytes':shutil.disk_usage(cell).free,'full_training_started':False,'raw_complete':False}

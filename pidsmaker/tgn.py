@@ -11,6 +11,158 @@ from torch_geometric.utils._scatter import scatter_argmax
 TGNMessageStoreType = Dict[int, Tuple[Tensor, Tensor, Tensor, Tensor]]
 
 
+class MessageStore:
+    """Vectorized per-node message store of TGN.
+
+    For each node `i`, it holds the events `(src, dst, t, msg)` of the last
+    `update()` call where `i` appeared in `src`, like the original PyG store
+    `{i: (src, dst, t, msg)}`, but without a Python dict of `num_nodes` entries and
+    without per-node Python loops: events are appended to growable buffers and each
+    node points to its contiguous slice. Stale slices are compacted lazily.
+    `get(n_id)` returns the concatenation of the slices of `n_id`, in the same
+    order as the original implementation.
+    """
+
+    def __init__(self, num_nodes: int, msg_dim: int = None, device=None):
+        self.num_nodes = num_nodes
+        self.msg_dim = msg_dim
+        self.device = device
+        self.reset()
+
+    def reset(self, device=None):
+        if device is not None:
+            self.device = device
+        d = self.device
+        self.start = torch.zeros(self.num_nodes, dtype=torch.long, device=d)
+        self.count = torch.zeros(self.num_nodes, dtype=torch.long, device=d)
+        self.size = 0  # number of used rows in the buffers
+        self.live = 0  # number of rows referenced by a node
+        self._alloc(1024)
+
+    def _alloc(self, capacity):
+        d = self.device
+        self.src = torch.empty(capacity, dtype=torch.long, device=d)
+        self.dst = torch.empty(capacity, dtype=torch.long, device=d)
+        self.t = torch.empty(capacity, dtype=torch.long, device=d)
+        self.msg = (
+            torch.empty((capacity, self.msg_dim), device=d) if self.msg_dim is not None else None
+        )
+
+    def _to(self, device):
+        if self.start.device != device:
+            self.device = device
+            for k in ["start", "count", "src", "dst", "t", "msg"]:
+                v = getattr(self, k)
+                if v is not None:
+                    setattr(self, k, v.to(device))
+
+    def _compact_and_reserve(self, extra):
+        """Keeps only live rows and ensures room for `extra` more rows."""
+        if self.size + extra <= self.src.numel():
+            return
+        if self.live + extra <= self.src.numel() // 2:
+            capacity = self.src.numel()  # compacting is enough
+        else:
+            capacity = max(2 * (self.live + extra), 1024)
+
+        idx, starts = self._gather_index(torch.nonzero(self.count).view(-1))
+        src, dst, t = self.src[idx], self.dst[idx], self.t[idx]
+        msg = self.msg[idx] if self.msg is not None else None
+        nodes = torch.nonzero(self.count).view(-1)
+
+        self._alloc(capacity)
+        n = idx.numel()
+        self.src[:n], self.dst[:n], self.t[:n] = src, dst, t
+        if msg is not None:
+            self.msg[:n] = msg
+        self.start[nodes] = starts
+        self.size = self.live = n
+
+    def _gather_index(self, n_id):
+        """Returns the buffer rows of the slices of `n_id` (concatenated) and their new starts."""
+        counts = self.count[n_id]
+        offsets = torch.cumsum(counts, 0) - counts
+        total = int(counts.sum())
+        # Row k of node j's slice is at `start_j + k`, i.e. `position + (start_j - offset_j)`
+        shift = torch.repeat_interleave(self.start[n_id] - offsets, counts, output_size=total)
+        idx = torch.arange(total, device=counts.device) + shift
+        return idx, offsets
+
+    def update(self, src: Tensor, dst: Tensor, t: Tensor, raw_msg: Tensor = None):
+        self._to(src.device)
+        n_id, perm = src.sort()
+        n_id, count = n_id.unique_consecutive(return_counts=True)
+        num = src.numel()
+
+        # Rows of the nodes being overwritten become stale
+        self.live -= int(self.count[n_id].sum())
+        self.count[n_id] = 0
+        self._compact_and_reserve(num)
+
+        lo, hi = self.size, self.size + num
+        self.src[lo:hi] = src[perm]
+        self.dst[lo:hi] = dst[perm]
+        self.t[lo:hi] = t[perm]
+        if self.msg is not None:
+            self.msg[lo:hi] = raw_msg[perm]
+        self.start[n_id] = lo + torch.cumsum(count, 0) - count
+        self.count[n_id] = count
+        self.size = hi
+        self.live += num
+
+    def get(self, n_id: Tensor):
+        self._to(n_id.device)
+        idx, _ = self._gather_index(n_id)
+        msg = self.msg[idx] if self.msg is not None else None
+        return self.src[idx], self.dst[idx], self.t[idx], msg
+
+
+class LastMessageStore(torch.nn.Module):
+    """Message store of TGN for the `LastAggregator`, as dense per-node tensors.
+
+    `MessageStore` keeps, for each node, all the events of the last `update()` where the node
+    was a source, and the `LastAggregator` then only uses the most recent of them (and of the
+    events of the other store). This store only keeps that event: for each node, the event with
+    the largest timestamp among those of its last `update()` (the last one in order on ties).
+    It needs no data-dependent shapes, hence no GPU->CPU synchronization, which dominated the
+    time of the TGN on the GPU (a few ms of GPU work per batch of 1024 edges).
+
+    The tensors are non-persistent buffers: they follow the module's device and are not saved.
+    """
+
+    def __init__(self, num_nodes: int, msg_dim: int):
+        super().__init__()
+        self.register_buffer("msg", torch.zeros(num_nodes, msg_dim), persistent=False)
+        self.register_buffer("other", torch.zeros(num_nodes, dtype=torch.long), persistent=False)
+        self.register_buffer("t", torch.zeros(num_nodes, dtype=torch.long), persistent=False)
+        self.register_buffer("valid", torch.zeros(num_nodes, dtype=torch.bool), persistent=False)
+        # Scratch space of `update`
+        self.register_buffer("_best", torch.zeros(num_nodes, dtype=torch.long), persistent=False)
+
+    def reset(self):
+        self.valid.fill_(False)
+
+    def update(self, node: Tensor, other: Tensor, t: Tensor, raw_msg: Tensor):
+        """Stores, for each node of `node`, its event (node, other, t, raw_msg) with the largest
+        timestamp (the last one on ties), replacing the previous one."""
+        if node.numel() == 0:
+            return
+        pos = torch.arange(node.numel(), device=node.device)
+        best = self._best
+        best.scatter_reduce_(0, node, t, reduce="amax", include_self=False)
+        is_max = t == best[node]
+        best.scatter_reduce_(
+            0, node, torch.where(is_max, pos, -1), reduce="amax", include_self=False
+        )
+        chosen = best[node]  # position of the chosen event of the node of each event
+        # Duplicate indices all write the values of the same event
+        self.msg[node] = raw_msg[chosen].to(self.msg.dtype)
+        self.other[node] = other[chosen]
+        self.t[node] = t[chosen]
+        # Not `valid[node] = True`: the value would be copied from the host, waiting for the GPU
+        self.valid.index_fill_(0, node, True)
+
+
 class TGNMemory(torch.nn.Module):
     r"""The Temporal Graph Network (TGN) memory model from the
     `"Temporal Graph Networks for Deep Learning on Dynamic Graphs"
@@ -44,6 +196,7 @@ class TGNMemory(torch.nn.Module):
         message_module: Callable,
         aggregator_module: Callable,
         device,
+        dense_last_messages: bool = None,
     ):
         super().__init__()
 
@@ -64,8 +217,19 @@ class TGNMemory(torch.nn.Module):
         self.register_buffer("last_update", last_update)
         self.register_buffer("_assoc", torch.empty(num_nodes, dtype=torch.long))
 
-        self.msg_s_store = {}
-        self.msg_d_store = {}
+        # With the `LastAggregator`, only the last message of each node is kept (see
+        # `LastMessageStore`): same memory, without GPU synchronizations
+        if dense_last_messages is None:
+            dense_last_messages = isinstance(aggregator_module, LastAggregator)
+        self.dense_last_messages = dense_last_messages
+        if dense_last_messages:
+            if not isinstance(aggregator_module, LastAggregator):
+                raise ValueError("`dense_last_messages` requires the `LastAggregator`")
+            self.last_msg_s = LastMessageStore(num_nodes, raw_msg_dim)
+            self.last_msg_d = LastMessageStore(num_nodes, raw_msg_dim)
+        else:
+            self.msg_s_store = MessageStore(num_nodes, raw_msg_dim, device)
+            self.msg_d_store = MessageStore(num_nodes, raw_msg_dim, device)
 
         self.reset_parameters()
 
@@ -102,27 +266,36 @@ class TGNMemory(torch.nn.Module):
 
         return memory, last_update
 
-    def update_state(self, src: Tensor, dst: Tensor, t: Tensor, raw_msg: Tensor):
+    def update_state(self, src: Tensor, dst: Tensor, t: Tensor, raw_msg: Tensor, n_id=None):
         """Updates the memory with newly encountered interactions
-        :obj:`(src, dst, t, raw_msg)`.
+        :obj:`(src, dst, t, raw_msg)`. `n_id`, if given, is `torch.cat([src, dst]).unique()`.
         """
-        n_id = torch.cat([src, dst]).unique()
+        if n_id is None:
+            n_id = torch.cat([src, dst]).unique()
 
         if self.training:
             self._update_memory(n_id)
-            self._update_msg_store(src, dst, t, raw_msg, self.msg_s_store)
-            self._update_msg_store(dst, src, t, raw_msg, self.msg_d_store)
+            self._store_messages(src, dst, t, raw_msg)
+        else:
+            self._store_messages(src, dst, t, raw_msg)
+            self._update_memory(n_id)
+
+    def _store_messages(self, src, dst, t, raw_msg):
+        if self.dense_last_messages:
+            self.last_msg_s.update(src, dst, t, raw_msg)
+            self.last_msg_d.update(dst, src, t, raw_msg)
         else:
             self._update_msg_store(src, dst, t, raw_msg, self.msg_s_store)
             self._update_msg_store(dst, src, t, raw_msg, self.msg_d_store)
-            self._update_memory(n_id)
 
     def _reset_message_store(self):
-        i = self.memory.new_empty((0,), device=self.device, dtype=torch.long)
-        msg = self.memory.new_empty((0, self.raw_msg_dim), device=self.device)
+        if self.dense_last_messages:
+            self.last_msg_s.reset()
+            self.last_msg_d.reset()
+            return
         # Message store format: (src, dst, t, msg)
-        self.msg_s_store = {j: (i, i, i, msg) for j in range(self.num_nodes)}
-        self.msg_d_store = {j: (i, i, i, msg) for j in range(self.num_nodes)}
+        self.msg_s_store.reset(self.memory.device)
+        self.msg_d_store.reset(self.memory.device)
 
     def _update_memory(self, n_id: Tensor):
         memory, last_update = self._get_updated_memory(n_id)
@@ -130,6 +303,8 @@ class TGNMemory(torch.nn.Module):
         self.last_update[n_id] = last_update
 
     def _get_updated_memory(self, n_id: Tensor) -> Tuple[Tensor, Tensor]:
+        if self.dense_last_messages:
+            return self._get_updated_memory_dense(n_id)
         self._assoc[n_id] = torch.arange(n_id.size(0), device=n_id.device)
 
         # Compute messages (src -> dst).
@@ -153,24 +328,39 @@ class TGNMemory(torch.nn.Module):
 
         return memory, last_update
 
-    def _update_msg_store(
-        self, src: Tensor, dst: Tensor, t: Tensor, raw_msg: Tensor, msg_store: TGNMessageStoreType
-    ):
-        n_id, perm = src.sort()
-        n_id, count = n_id.unique_consecutive(return_counts=True)
-        for i, idx in zip(n_id.tolist(), perm.split(count.tolist())):
-            msg_store[i] = (src[idx], dst[idx], t[idx], raw_msg[idx])
+    def _get_updated_memory_dense(self, n_id: Tensor) -> Tuple[Tensor, Tensor]:
+        """`_get_updated_memory` with the `LastMessageStore`: the aggregated message of a node is
+        its most recent message (the one of the dst store on ties, which comes last), zeros if
+        it has none, and its `last_update` the timestamp of that message (0 if none)."""
+        s, d = self.last_msg_s, self.last_msg_d
+        memory = self.memory[n_id]
+        last_update = self.last_update[n_id]
+        valid_s, valid_d = s.valid[n_id], d.valid[n_id]
+        t_s, t_d = s.t[n_id], d.t[n_id]
 
-    def _compute_msg(self, n_id: Tensor, msg_store: TGNMessageStoreType, msg_module: Callable):
-        data = [msg_store[i] for i in n_id.tolist()]
-        src, dst, t, raw_msg = list(zip(*data))
-        src = torch.cat(src, dim=0)
-        dst = torch.cat(dst, dim=0)
-        t = torch.cat(t, dim=0)
-        # Filter out empty tensors to avoid `invalid configuration argument`.
-        # TODO Investigate why this is needed.
-        raw_msg = [m for i, m in enumerate(raw_msg) if m.numel() > 0 or i == 0]
-        raw_msg = torch.cat(raw_msg, dim=0)
+        def message(store, msg_module, t):
+            t_enc = self.time_enc((t - last_update).to(store.msg.dtype))
+            return msg_module(memory, self.memory[store.other[n_id]], store.msg[n_id], t_enc)
+
+        msg_s = message(s, self.msg_s_module, t_s)
+        msg_d = message(d, self.msg_d_module, t_d)
+
+        use_d = valid_d & (~valid_s | (t_d >= t_s))
+        has_msg = valid_s | valid_d
+        aggr = torch.where(use_d.unsqueeze(1), msg_d, msg_s)
+        aggr = torch.where(has_msg.unsqueeze(1), aggr, torch.zeros_like(aggr))
+
+        new_memory = self.gru(aggr, memory)
+        new_last_update = torch.where(use_d, t_d, torch.where(valid_s, t_s, torch.zeros_like(t_s)))
+        return new_memory, new_last_update
+
+    def _update_msg_store(
+        self, src: Tensor, dst: Tensor, t: Tensor, raw_msg: Tensor, msg_store: MessageStore
+    ):
+        msg_store.update(src, dst, t, raw_msg)
+
+    def _compute_msg(self, n_id: Tensor, msg_store: MessageStore, msg_module: Callable):
+        src, dst, t, raw_msg = msg_store.get(n_id)
         t_rel = t - self.last_update[src]
         t_enc = self.time_enc(t_rel.to(raw_msg.dtype))
 
@@ -199,6 +389,28 @@ class TGNMemory(torch.nn.Module):
             self._reset_message_store()
         super().train(mode)
 
+    # Nodes whose memory is updated at once when flushing the message store: the aggregated
+    # messages of all the nodes of TRACE_E3 (44.5M) take 56 GB of GPU memory, and the update
+    # of 2M nodes peaks at 12 GB with Kairos (250K nodes: 1.5 GB, at a similar speed).
+    flush_chunk_size = 250_000
+
+    def _flush_all_memory(self):
+        """Updates the memory of all nodes, as `_update_memory` on all nodes, in chunks of nodes.
+        Every chunk reads the memory before the update, so the new memory of all chunks is
+        computed first (and kept on CPU) before any is written."""
+        n_id = torch.arange(self.num_nodes, device=self.memory.device)
+        if self.num_nodes <= self.flush_chunk_size:
+            self._update_memory(n_id)
+            return
+        updates = []
+        for chunk in n_id.split(self.flush_chunk_size):
+            memory, last_update = self._get_updated_memory(chunk)
+            updates.append((chunk, memory.detach().cpu(), last_update.cpu()))
+            del memory, last_update
+        for chunk, memory, last_update in updates:
+            self.memory[chunk] = memory.to(self.memory.device)
+            self.last_update[chunk] = last_update.to(self.last_update.device)
+
 
 class TimeEncodingMemory(torch.nn.Module):
     """Custom lightweight class to only memorize past timestamps."""
@@ -215,8 +427,8 @@ class TimeEncodingMemory(torch.nn.Module):
         self.register_buffer("last_update", last_update)
         self.register_buffer("_assoc", torch.empty(num_nodes, dtype=torch.long))
 
-        self.msg_s_store = {}
-        self.msg_d_store = {}
+        self.msg_s_store = MessageStore(num_nodes, None, device)
+        self.msg_d_store = MessageStore(num_nodes, None, device)
 
         self.reset_parameters()
 
@@ -230,11 +442,12 @@ class TimeEncodingMemory(torch.nn.Module):
         zeros(self.last_update)
         self._reset_message_store()
 
-    def update_state(self, src: Tensor, dst: Tensor, t: Tensor, raw_msg: Tensor):
+    def update_state(self, src: Tensor, dst: Tensor, t: Tensor, raw_msg: Tensor, n_id=None):
         """Updates the memory with newly encountered interactions
-        :obj:`(src, dst, t, raw_msg)`.
+        :obj:`(src, dst, t, raw_msg)`. `n_id`, if given, is `torch.cat([src, dst]).unique()`.
         """
-        n_id = torch.cat([src, dst]).unique()
+        if n_id is None:
+            n_id = torch.cat([src, dst]).unique()
 
         if self.training:
             self._update_memory(n_id)
@@ -246,22 +459,16 @@ class TimeEncodingMemory(torch.nn.Module):
             self._update_memory(n_id)
 
     def _reset_message_store(self):
-        i = torch.empty((0,), device=self.device, dtype=torch.long)
         # Message store format: (src, dst, t)
-        self.msg_s_store = {j: (i, i, i) for j in range(self.num_nodes)}
-        self.msg_d_store = {j: (i, i, i) for j in range(self.num_nodes)}
+        self.msg_s_store.reset(self.last_update.device)
+        self.msg_d_store.reset(self.last_update.device)
 
     def _update_memory(self, n_id: Tensor):
         last_update = self.get_last_update(n_id)
         self.last_update[n_id] = last_update
 
-    def _compute_last_update(self, n_id: Tensor, msg_store: TGNMessageStoreType):
-        data = [msg_store[i] for i in n_id.tolist()]
-        src, dst, t = list(zip(*data))
-        src = torch.cat(src, dim=0)
-        dst = torch.cat(dst, dim=0)
-        t = torch.cat(t, dim=0)
-
+    def _compute_last_update(self, n_id: Tensor, msg_store: MessageStore):
+        src, dst, t, _ = msg_store.get(n_id)
         return t, src, dst
 
     def get_last_update(self, n_id: Tensor) -> Tensor:
@@ -278,12 +485,9 @@ class TimeEncodingMemory(torch.nn.Module):
         return last_update
 
     def _update_msg_store(
-        self, src: Tensor, dst: Tensor, t: Tensor, raw_msg: Tensor, msg_store: TGNMessageStoreType
+        self, src: Tensor, dst: Tensor, t: Tensor, raw_msg: Tensor, msg_store: MessageStore
     ):
-        n_id, perm = src.sort()
-        n_id, count = n_id.unique_consecutive(return_counts=True)
-        for i, idx in zip(n_id.tolist(), perm.split(count.tolist())):
-            msg_store[i] = (src[idx], dst[idx], t[idx])
+        msg_store.update(src, dst, t)
 
     def train(self, mode: bool = True):
         """Sets the module in training mode."""
@@ -428,4 +632,8 @@ class LastNeighborLoader:
 
     def reset_state(self):
         self.cur_e_id = 0
+        self.e_id.fill_(-1)
+
+    def clear(self):
+        """Removes all neighbors, while new edges keep their IDs counting from the last ones."""
         self.e_id.fill_(-1)

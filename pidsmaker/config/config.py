@@ -1,12 +1,22 @@
 import os
 
+from datetime import date, timedelta
+
+from .schemas import SCHEMAS
+
+
+def _date_range(start, end):
+    """Dates from `start` to `end` included, as YYYY-MM-DD strings."""
+    first, last = date.fromisoformat(start), date.fromisoformat(end)
+    return [str(first + timedelta(days=i)) for i in range((last - first).days + 1)]
+
+
 DATASET_DEFAULT_CONFIG = {
     "THEIA_E5": {
         "raw_dir": "",
         "database": "theia_e5",
         "database_all_file": "theia_e5",
-        "num_node_types": 3,
-        "num_edge_types": 10,
+        "schema": "darpa_tc",
         "timezone": "US/Eastern",
         "start_date": "2019-05-08",
         "end_date": "2019-05-18",
@@ -29,8 +39,7 @@ DATASET_DEFAULT_CONFIG = {
         "raw_dir": "",
         "database": "theia_e3",
         "database_all_file": "theia_e3",
-        "num_node_types": 3,
-        "num_edge_types": 10,
+        "schema": "darpa_tc",
         "timezone": "US/Eastern",
         "start_date": "2018-04-02",
         "end_date": "2018-04-14",
@@ -69,8 +78,7 @@ DATASET_DEFAULT_CONFIG = {
         "raw_dir": "",
         "database": "cadets_e5",
         "database_all_file": "cadets_e5",
-        "num_node_types": 3,
-        "num_edge_types": 10,
+        "schema": "darpa_tc",
         "timezone": "US/Eastern",
         "start_date": "2019-05-08",
         "end_date": "2019-05-18",
@@ -95,8 +103,7 @@ DATASET_DEFAULT_CONFIG = {
         "raw_dir": "",
         "database": "cadets_e3",
         "database_all_file": "cadets_e3",
-        "num_node_types": 3,
-        "num_edge_types": 11,
+        "schema": "cadets_e3_fork",
         "timezone": "US/Eastern",
         "start_date": "2018-04-02",
         "end_date": "2018-04-14",
@@ -130,8 +137,7 @@ DATASET_DEFAULT_CONFIG = {
         "raw_dir": "",
         "database": "clearscope_e5",
         "database_all_file": "clearscope_e5",
-        "num_node_types": 3,
-        "num_edge_types": 10,
+        "schema": "darpa_tc",
         "timezone": "US/Eastern",
         "start_date": "2019-05-08",
         "end_date": "2019-05-18",
@@ -152,11 +158,7 @@ DATASET_DEFAULT_CONFIG = {
                 "2019-05-15 16:19:00",
             ],
             # ["E5-CLEARSCOPE/node_clearscope_e5_firefox_0517.csv", '2019-05-17 11:49:00', '2019-05-17 15:32:00'],
-            [
-                "E5-CLEARSCOPE/node_clearscope_e5_lockwatch_0517.csv",
-                "2019-05-17 15:48:00",
-                "2019-05-17 16:01:00",
-            ],
+            # ["E5-CLEARSCOPE/node_clearscope_e5_lockwatch_0517.csv", "2019-05-17 15:48:00", "2019-05-17 16:01:00"],
             [
                 "E5-CLEARSCOPE/node_clearscope_e5_tester_0517.csv",
                 "2019-05-17 16:20:00",
@@ -168,8 +170,7 @@ DATASET_DEFAULT_CONFIG = {
         "raw_dir": "",
         "database": "clearscope_e3",
         "database_all_file": "clearscope_e3",
-        "num_node_types": 3,
-        "num_edge_types": 10,
+        "schema": "darpa_tc",
         "timezone": "US/Eastern",
         "start_date": "2018-04-02",
         "end_date": "2018-04-14",
@@ -202,8 +203,7 @@ DATASET_DEFAULT_CONFIG = {
         "raw_dir": "",
         "database": "optc_201",
         "database_all_file": "optc_201",
-        "num_node_types": 3,
-        "num_edge_types": 10,
+        "schema": "optc",
         "timezone": "Etc/GMT+4",
         "start_date": "2019-09-15",
         "end_date": "2019-09-26",
@@ -222,8 +222,7 @@ DATASET_DEFAULT_CONFIG = {
         "raw_dir": "",
         "database": "optc_501",
         "database_all_file": "optc_501",
-        "num_node_types": 3,
-        "num_edge_types": 10,
+        "schema": "optc",
         "timezone": "Etc/GMT+4",
         "start_date": "2019-09-15",
         "end_date": "2019-09-26",
@@ -242,8 +241,7 @@ DATASET_DEFAULT_CONFIG = {
         "raw_dir": "",
         "database": "optc_051",
         "database_all_file": "optc_051",
-        "num_node_types": 3,
-        "num_edge_types": 10,
+        "schema": "optc",
         "timezone": "Etc/GMT+4",
         "start_date": "2019-09-15",
         "end_date": "2019-09-26",
@@ -262,8 +260,7 @@ DATASET_DEFAULT_CONFIG = {
         "raw_dir": "",
         "database": "trace_e5",
         "database_all_file": "trace_e5",
-        "num_node_types": 3,
-        "num_edge_types": 10,
+        "schema": "darpa_tc",
         "timezone": "US/Eastern",
         "start_date": "2019-05-08",
         "end_date": "2019-05-18",
@@ -286,8 +283,7 @@ DATASET_DEFAULT_CONFIG = {
         "raw_dir": "",
         "database": "trace_e3",
         "database_all_file": "trace_e3",
-        "num_node_types": 3,
-        "num_edge_types": 10,
+        "schema": "darpa_tc",
         "timezone": "US/Eastern",
         "start_date": "2018-04-02",
         "end_date": "2018-04-14",
@@ -331,8 +327,7 @@ DATASET_DEFAULT_CONFIG = {
         "raw_dir": "",
         "database": "fivedirections_e5",
         "database_all_file": "fivedirections_e5",
-        "num_node_types": 3,
-        "num_edge_types": 10,
+        "schema": "darpa_tc",
         "timezone": "US/Eastern",
         "start_date": "2019-05-08",
         "end_date": "2019-05-18",
@@ -377,8 +372,7 @@ DATASET_DEFAULT_CONFIG = {
         "raw_dir": "",
         "database": "fivedirections_e3",
         "database_all_file": "fivedirections_e3",
-        "num_node_types": 3,
-        "num_edge_types": 10,
+        "schema": "darpa_tc",
         "timezone": "US/Eastern",
         "start_date": "2018-04-02",
         "end_date": "2018-04-14",
@@ -417,8 +411,7 @@ DATASET_DEFAULT_CONFIG = {
         "raw_dir": "",
         "database": "PROVENANCE_BENIGN",
         "database_all_file": "PROVENANCE_BENIGN",
-        "num_node_types": 3,
-        "num_edge_types": 10,
+        "schema": "darpa_tc",
         "timezone": "UTC",
         "start_date": "2026-03-16",
         "end_date": "2026-03-16",
@@ -434,8 +427,7 @@ DATASET_DEFAULT_CONFIG = {
         "raw_dir": "",
         "database": "atlasv2_edr",
         "database_all_file": "atlasv2_edr",
-        "num_node_types": 3,
-        "num_edge_types": 33,
+        "schema": "carbon_black_edr",
         "timezone": "US/Central",
         "start_date": "2022-07-15",
         "end_date": "2022-07-21",
@@ -489,8 +481,7 @@ DATASET_DEFAULT_CONFIG = {
         "raw_dir": "",
         "database": "carbanakv2_edr",
         "database_all_file": "carbanakv2_edr",
-        "num_node_types": 3,
-        "num_edge_types": 33,
+        "schema": "carbon_black_edr",
         "timezone": "US/Central",
         "start_date": "2024-04-18",
         "end_date": "2024-05-13",
@@ -537,6 +528,52 @@ DATASET_DEFAULT_CONFIG = {
             ["carbanakv2_edr/carbanakv2_edr.csv", "2024-04-30 17:30:00", "2024-05-10 20:30:00"]
         ],
     },
+    # LANL "Comprehensive, Multi-Source Cyber-Security Events" (Kent, 2015): NTLM authentications
+    # between computers, as in Euler, Argus, Jbeil and LARES. LANL timestamps are seconds from an
+    # undisclosed origin: they are mapped to synthetic dates such that the first red team event
+    # (t=150885) starts on 2015-01-03, i.e. the two first days are benign
+    # (see `dataset_preprocessing/lanl/create_database_lanl.py`). The test period covers all the
+    # red team events (2015-01-03 to 2015-01-30), as Euler (Argus uses the first 14 days).
+    "LANL": {
+        "raw_dir": "",
+        "database": "lanl",
+        "database_all_file": "lanl",
+        "schema": "lanl_auth",
+        "timezone": "UTC",
+        "start_date": "2015-01-01",
+        "end_date": "2015-02-28",
+        "train_dates": ["2015-01-01"],
+        "val_dates": ["2015-01-02"],
+        "test_dates": _date_range("2015-01-03", "2015-01-30"),
+        "unused_dates": _date_range("2015-01-31", "2015-02-28"),
+        # Labels are those of the events in the database (red team events of redteam.txt)
+        "ground_truth_relative_path": [],
+        "attack_to_time_window": [],
+        # Root source of the attacks (index ID), whose malicious edges are the positives of
+        # LARES' evaluation (`host_two_stage_evaluation.root_attack_nodes: dataset`)
+        "root_attack_nodes": [9660],
+    },
+    # DARPA OpTC network flows (FLOW START and FLOW MESSAGE events between all hosts), in the version
+    # preprocessed and labelled by LARES, with the real timestamps of OpTC
+    # (see `dataset_preprocessing/optc/create_database_optc_net.py`).
+    "OPTC_NET": {
+        "raw_dir": "",
+        "database": "optc_net",
+        "database_all_file": "optc_net",
+        "schema": "optc_flows",
+        "timezone": "Etc/GMT+4",
+        "start_date": "2019-09-16",
+        "end_date": "2019-09-25",
+        "train_dates": _date_range("2019-09-16", "2019-09-21"),
+        "val_dates": ["2019-09-22"],
+        "test_dates": _date_range("2019-09-23", "2019-09-25"),
+        "unused_dates": [],
+        # Labels are those of the events in the database (malicious flows labelled by LARES)
+        "ground_truth_relative_path": [],
+        "attack_to_time_window": [],
+        # Root sources of the attacks (LARES host IDs), see the `LANL` entry
+        "root_attack_nodes": [201, 402, 501],
+    },
 }
 
 # Arguments
@@ -568,6 +605,26 @@ class Arg:
         self.desc = desc
 
 
+def _node_label_features_cfg():
+    """`construction.node_label_features` args: one per node type of all schemas, in id order."""
+    args = {}
+    for schema in SCHEMAS.values():
+        for nt in sorted(schema.node_types, key=lambda nt: nt.id):
+            if nt.name in args:
+                continue
+            args[nt.name] = Arg(
+                str,
+                vals=AND(nt.label_choices()),
+                desc=f"Attributes of `{nt.name}` nodes used as node labels (concatenated): "
+                f"{', '.join(nt.attributes)}. `type` adds the node type, and `auto` uses "
+                "the type-specific default label, only made of non-null attributes.",
+            )
+    return args
+
+
+NODE_LABEL_FEATURES_CFG = _node_label_features_cfg()
+
+
 FEATURIZATIONS_CFG = {
     "word2vec": {
         "alpha": Arg(float),
@@ -581,9 +638,42 @@ FEATURIZATIONS_CFG = {
         "decline_rate": Arg(int),
     },
     "doc2vec": {
-        "include_neighbors": Arg(bool),
+        "include_neighbors": Arg(
+            bool,
+            desc="Whether the document of a node also contains the labels of its successors.",
+        ),
+        "truncate_process_name": Arg(
+            bool,
+            desc="Whether the features of processes are computed from the directory of their \
+                executable only, without its name nor the rest of their label (as in R-Caid, \
+                whose `predict_process_tag` objective predicts the name).",
+        ),
         "epochs": Arg(int),
         "alpha": Arg(float),
+        "workers": Arg(
+            int,
+            desc="Number of threads training Doc2Vec. Training is deterministic only with 1.",
+        ),
+    },
+    # Whole-graph embedding of each time window (ProGrapher), see featurization_graph2vec.py
+    "graph2vec": {
+        "wl_iterations": Arg(
+            int,
+            desc="Depth D of the Weisfeiler-Lehman rooted subgraphs (RSGs) of each node, built from \
+                node and edge types (ProGrapher: 3 on small graphs, 4 on large ones).",
+        ),
+        "negative": Arg(int, desc="Number of negative RSGs sampled per RSG (PV-DBOW)."),
+        "min_count": Arg(int, desc="RSGs seen fewer times in the training snapshots are ignored."),
+        "alpha": Arg(float, desc="Initial learning rate of doc2vec."),
+        "infer_epochs": Arg(
+            int,
+            desc="Epochs to infer the embedding of each snapshot (all splits) from the trained RSG vectors.",
+        ),
+        "num_workers": Arg(
+            int,
+            desc="Processes extracting RSGs and inferring embeddings, and threads of doc2vec \
+                training (training is only deterministic with 1).",
+        ),
     },
     "fasttext": {
         "min_count": Arg(int),
@@ -906,6 +996,7 @@ SUBWORD_TOKENIZATION_METHODS = [m for m in TEXT_TOKENIZATION_METHODS if m != "wh
 FEATURIZATION_TOKENIZATIONS = {
     "word2vec": SUBWORD_TOKENIZATION_METHODS,
     "doc2vec": TEXT_TOKENIZATION_METHODS,
+    "graph2vec": ["none"],
     "fasttext": SUBWORD_TOKENIZATION_METHODS,
     "temporal_rw": TEXT_TOKENIZATION_METHODS,
     "flash": TEXT_TOKENIZATION_METHODS,
@@ -943,10 +1034,79 @@ ENCODERS_CFG = {
         "concat": Arg(bool),
         "flow": Arg(str),
         "num_layers": Arg(int),
+        "final_activation": Arg(
+            bool, desc="Applies `activation` to the output of the last layer too, as in Kairos."
+        ),
     },
     "sage": {
         "activation": Arg(str),
         "num_layers": Arg(int),
+    },
+    "gcn": {
+        "activation": Arg(str),
+        "num_layers": Arg(int, desc="Number of GCN layers. Edges are weighted by `batch.edge_weight` (see the `merge_edges` transformation)."),
+    },
+    "node_id_embedding": {
+        "dim": Arg(int, desc="Size of the learned embedding of each node's identity, concatenated to its input features (as the one-hot node IDs of Euler, Argus and LARES)."),
+        "all_nodes": Arg(
+            bool,
+            desc="Embeds all the nodes of the dataset in every graph, as Euler and Argus (nodes absent \
+                from the graph only get their ID embedding). Combined with `snapshot_gru`, the state of \
+                every node is updated at every graph, and with uniform negative sampling, negative \
+                edges reach all nodes. Only for edge-level objectives.",
+        ),
+    },
+    "snapshot_gru": {
+        "hidden_dim": Arg(int, desc="Size of the GRU state, projected to `node_out_dim` (0: `node_out_dim`)."),
+        "dropout": Arg(float, desc="Dropout applied to the input of the GRU."),
+    },
+    # ProGrapher: predicts the graph2vec embedding of each snapshot from the previous ones
+    "textrcnn": {
+        "sequence_length": Arg(
+            int,
+            desc="Number of previous snapshots (graphs) whose graph2vec embeddings form the input \
+                sequence (ProGrapher's L). Shorter sequences are used when fewer snapshots were seen.",
+        ),
+        "num_layers": Arg(int, desc="Number of layers of the bidirectional RNN (hidden size: `node_hid_dim`)."),
+        "rnn_type": Arg(
+            str,
+            vals=OR(["lstm", "gru", "rnn"]),
+            desc="Bidirectional RNN computing the left and right contexts of each snapshot: \
+                `rnn` is the ReLU recurrence of the TextRCNN equations, `lstm` and `gru` are gated.",
+        ),
+    },
+    "lares": {
+        "flow": Arg(
+            str,
+            vals=OR(["target_to_source", "source_to_target"]),
+            desc="`target_to_source` (LARES): hosts aggregate the messages of the destinations of \
+                their outgoing edges; `source_to_target`: of the sources of their incoming edges.",
+        ),
+        "use_node_features": Arg(
+            bool,
+            desc="Adds a projection of the node features to the node ID embedding (LARES only uses \
+                node IDs).",
+        ),
+    },
+    "egraphsage": {
+        "activation": Arg(str),
+        "num_layers": Arg(int, desc="Number of E-GraphSAGE layers, whose messages include the edge features."),
+        "undirected": Arg(bool, desc="Aggregates each edge in both directions, as E-GraphSAGE and Anomal-E (default: True)."),
+    },
+    "argus": {
+        "num_layers": Arg(int, desc="Number of layers: GCN layers followed by a last edge-conditioned convolution (NNConv) if edge features are used."),
+    },
+    "shadewatcher": {
+        "hidden_dims": Arg(
+            str,
+            desc="Comma-separated output sizes of the GNN layers propagating the TransR entity \
+                embeddings (of size `node_hid_dim`) over the knowledge graph (ShadeWatcher: `32,16`). \
+                The output concatenates the entity embeddings and the output of each layer, \
+                projected to `node_out_dim` if their sizes differ.",
+        ),
+        "kg_dim": Arg(int, desc="Size of the relation space of TransR (relation embeddings and projections)."),
+        "kg_neg_ratio": Arg(int, desc="Number of corrupted triples per triple of the TransR loss."),
+        "kg_margin": Arg(float, desc="Margin between the distances of valid and corrupted triples in the TransR loss."),
     },
     "gat": {
         "activation": Arg(str),
@@ -968,7 +1128,10 @@ ENCODERS_CFG = {
         "num_layers": Arg(int),
     },
     "sum_aggregation": {},
-    "rcaid_gat": {},
+    "rcaid_gat": {
+        "num_layers": Arg(int, desc="Number of layers (local + root attention, then MLP update)."),
+        "num_heads": Arg(int, desc="Number of attention heads (averaged) of each attention."),
+    },
     "magic_gat": {
         "num_layers": Arg(int),
         "num_heads": Arg(int),
@@ -996,7 +1159,8 @@ DECODERS_CFG = {
             str,
             desc="A string describing a simple neural network. Example: if the encoder's output has shape `node_out_dim=128` \
                                 setting `architecture_str=linear(2) | relu | linear(0.5)` creates this MLP: nn.Linear(128, 256), nn.ReLU(), nn.Linear(256, 128), nn.Linear(128, y). \
-                                Precisely, in linear(x), x is the multiplier of input neurons. The final layer `nn.Linear(128, y)` is added automatically such that `y` is the \
+                                Precisely, in linear(x), x is the multiplier of input neurons. `dropout(p)` adds a dropout of rate p, \
+                                `dropout` one of rate `training.encoder.dropout`. The final layer `nn.Linear(128, y)` is added automatically such that `y` is the \
                                 output size matching the downstream objective (e.g. edge type prediction involves predicting 10 edge types, so the output of the decoder should be 10).",
         ),
         "src_dst_projection_coef": Arg(
@@ -1022,19 +1186,27 @@ RECON_LOSSES = ["SCE", "MSE", "MSE_sum", "MAE", "none"]
 PRED_LOSSES = ["cross_entropy", "BCE"]
 OBJECTIVES_NODE_LEVEL = [
     "predict_node_type",
+    "predict_process_tag",
     "reconstruct_node_features",
     "reconstruct_node_embeddings",
     "reconstruct_masked_features",
     "one_class",
     "predict_masked_struct",
+    "predict_snapshot_embedding",
 ]
 OBJECTIVES_EDGE_LEVEL = [
+    "autoencode_edge_embeddings",
+    "deep_graph_infomax",
     "predict_edge_type",
     "predict_edge_supervised",
     "reconstruct_edge_embeddings",
     "predict_edge_contrastive",
 ]
 OBJECTIVES = OBJECTIVES_NODE_LEVEL + OBJECTIVES_EDGE_LEVEL
+# Objectives that do not use a decoder (their `decoder` arg is ignored)
+OBJECTIVES_WITHOUT_DECODER = ["deep_graph_infomax", "autoencode_edge_embeddings"]
+# The encoder of ProGrapher (`textrcnn`) directly predicts the snapshot embedding
+OBJECTIVES_WITHOUT_DECODER += ["predict_snapshot_embedding"]
 OBJECTIVES_CFG = {
     # Prediction-based
     "predict_edge_supervised": {
@@ -1056,13 +1228,23 @@ OBJECTIVES_CFG = {
         "pos_weight": Arg(float, desc="BCE pos_weight for the attack class (on top of 1:1 oversampling)."),
     },
     "predict_edge_type": {
-        "loss": Arg(str, vals=OR(PRED_LOSSES), desc="Loss used to predict the edge type."),
+        "loss": Arg(
+            str,
+            vals=OR(PRED_LOSSES + ["AMS"]),
+            desc="Loss used to predict the edge type. AMS: additive margin softmax (see `AMS`).",
+        ),
         "decoder": Arg(
             str, vals=OR(list(DECODERS_CFG.keys())), desc="Decoder used before computing loss."
         ),
         **DECODERS_CFG,
         "balanced_loss": Arg(bool),
         "use_triplet_types": Arg(bool),
+        "edge_type_in_msg": Arg(
+            bool,
+            desc="Keeps the edge type in the edge messages `msg` (TGN memory and `msg` edge \
+                features), as in Kairos. Messages of an edge are only used after its type is \
+                predicted. By default, the edge type is removed from the messages.",
+        ),
         "AMS":
             {
                 "version": Arg(int),
@@ -1076,6 +1258,33 @@ OBJECTIVES_CFG = {
         ),
         **DECODERS_CFG,
         "balanced_loss": Arg(bool),
+        "flash_snapshots": Arg(
+            bool,
+            desc="With the `flash` threshold method: trains each epoch on the training nodes still "
+            "misclassified, and flags a node only if no snapshot of the epochs so far predicts its "
+            "type correctly with a confidence above the threshold, as in FLASH.",
+        ),
+        "flash_drop_conf": Arg(
+            float,
+            desc="With `flash_snapshots`: training nodes predicted with this confidence or more are "
+            "removed after an epoch, as the correctly predicted ones (0.9 in FLASH).",
+        ),
+    },
+    # R-Caid: predicts the name of the executable of each process (other nodes are not scored)
+    "predict_process_tag": {
+        "decoder": Arg(
+            str, vals=OR(list(DECODERS_CFG.keys())), desc="Decoder used before computing loss."
+        ),
+        **DECODERS_CFG,
+        "balanced_loss": Arg(bool),
+        "detection": Arg(
+            str,
+            vals=OR(["loss", "kmeans"]),
+            desc="Score of the processes at inference. `loss`: cross-entropy of their tag (tags \
+                unseen in training have their own class, never predicted). `kmeans`: distance of \
+                their embedding to the median of the nearest K-Means cluster of training \
+                processes (as in the paper).",
+        ),
     },
     "predict_masked_struct": {
         "loss": Arg(str, vals=OR(PRED_LOSSES)),
@@ -1084,6 +1293,11 @@ OBJECTIVES_CFG = {
         ),
         **DECODERS_CFG,
         "balanced_loss": Arg(bool),
+        "max_samples": Arg(
+            int,
+            desc="Number of existing edges sampled per batch as positives, with as many negative \
+                node pairs, capped by the number of nodes (MAGIC: 10000). 0 uses all the edges.",
+        ),
     },
     "detect_edge_few_shot": {
         "decoder": Arg(
@@ -1095,10 +1309,54 @@ OBJECTIVES_CFG = {
         "decoder": Arg(
             str, vals=OR(list(DECODERS_CFG.keys())), desc="Decoder used before computing loss."
         ),
+        "loss": Arg(
+            str,
+            vals=OR(["bce", "ap", "bpr"]),
+            desc="`bce`: binary cross-entropy of positive vs. random negative edges (default), \
+                `ap`: surrogate average precision loss of Argus, `bpr`: pairwise BPR loss of \
+                ShadeWatcher, softplus(s_neg - s_pos) between each negative edge and its positive edge.",
+        ),
+        "ap_margin": Arg(float, desc="Margin of the squared hinge of the `ap` loss (default: 0.8)."),
+        "neg_sampling": Arg(
+            str,
+            vals=OR(["shuffle_dst", "uniform", "uniform_dst", "tgn"]),
+            desc="Negative edges: `shuffle_dst` pairs each source with the destination of another \
+                edge of the graph (negatives keep the degree of destinations), `uniform` draws \
+                sources and destinations uniformly among the embedded nodes (as Euler and Argus), \
+                `uniform_dst` pairs the source of each edge with uniform destinations among the \
+                embedded nodes, `tgn` pairs it with a uniform destination of the dataset embedded \
+                by the TGN (as TGN and Jbeil, requires `tgn_last_neighbor.negative_destinations`).",
+        ),
+        "neg_ratio": Arg(float, desc="Number of negatives per positive edge with `uniform` sampling."),
         **DECODERS_CFG,
         "inner_product": {
             "dropout": Arg(float),
+            "negate": Arg(
+                bool,
+                desc="Scores edges by the negated inner product, as ShadeWatcher, whose inner \
+                    product is the probability that two entities would not interact.",
+            ),
         },
+    },
+    # Self-supervised contrastive learning on edges, with PCA anomaly scores (Anomal-E)
+    "deep_graph_infomax": {
+        "decoder": Arg(
+            str, vals=OR(["none"]), desc="Unused: the discriminator of DGI is bilinear."
+        ),
+        "pca_components": Arg(
+            int,
+            desc="Number of principal components of the PCA fitted on the embeddings of training \
+                edges. Edges are scored by the reconstruction error of their embedding.",
+        ),
+    },
+    # Prediction of the graph2vec embedding of each snapshot, with node scores (ProGrapher)
+    "predict_snapshot_embedding": {
+        "decoder": Arg(str, vals=OR(["none"]), desc="Unused: the encoder predicts the embedding."),
+        "top_k": Arg(
+            int,
+            desc="Number of top-ranked rooted subgraphs (key indicators) whose nodes get a score: \
+                other nodes get 0. 0 scores all nodes by the rank of their best rooted subgraph.",
+        ),
     },
     # Reconstruction-based
     "reconstruct_node_features": {
@@ -1114,6 +1372,14 @@ OBJECTIVES_CFG = {
             str, vals=OR(list(DECODERS_CFG.keys())), desc="Decoder used before computing loss."
         ),
         **DECODERS_CFG,
+    },
+    "autoencode_edge_embeddings": {
+        "decoder": Arg(str, vals=OR(["none"]), desc="Unused: the objective has its own autoencoder."),
+        "use_edge_feats": Arg(
+            bool,
+            desc="Adds the edge features (`batching.edge_features`) to the edge embedding through a \
+                gated skip connection, as LARES.",
+        ),
     },
     "reconstruct_edge_embeddings": {
         "loss": Arg(str, vals=OR(RECON_LOSSES)),
@@ -1154,7 +1420,16 @@ SYNTHETIC_ATTACKS = {
 REQUIRE_HETERO_FEATURES_ENCODERS = ["hetero_graph_transformer"]
 REQUIRE_NON_REVERSED_EDGES_ENCODERS = ["hetero_graph_transformer", "event_type_encoding"]
 # Encoders wrapping or preprocessing the inputs of a single base encoder (e.g. `tgn,graph_attention`)
-ENCODER_WRAPPERS = ["tgn", "ancestor_encoding", "entity_type_encoding", "event_type_encoding"]
+ENCODER_WRAPPERS = [
+    "tgn",
+    "ancestor_encoding",
+    "entity_type_encoding",
+    "event_type_encoding",
+    # Node ID embeddings concatenated to inputs, and a GRU over the successive embeddings of
+    # nodes across graphs (Euler, Argus), see `pidsmaker/encoders/temporal_wrappers.py`
+    "node_id_embedding",
+    "snapshot_gru",
+]
 
 THRESHOLD_METHODS = ["max_val_loss", "mean_val_loss", "percentile", "threatrace", "magic", "flash", "nodlink", "fixed_zero", "ocrapt"]
 
@@ -1205,22 +1480,39 @@ TASK_ARGS = {
         "consistent_edge_types": Arg(
             bool, desc="Map OpTC edge types to DARPA TC equivalents for shared vocabulary across datasets."
         ),
+        "operations": Arg(
+            str,
+            desc="Events kept when building graphs, by value of their `operation` column: \
+                `default` keeps the default events of the dataset's schema (all events, except for \
+                OpTC network flows where only FLOW_START events are kept, as in LARES and Argus), \
+                `all` keeps all events, otherwise a comma-separated list of operations \
+                (e.g. `FLOW_START,FLOW_MESSAGE`).",
+        ),
+        "drop_noise_events": Arg(
+            bool,
+            desc="Drops the noise events of the dataset's schema when building graphs (OpTC \
+                network flows: NetBIOS, LLMNR and SSDP broadcasts and multicasts and ICMPv6 neighbor \
+                discovery, which link every host to most hosts in every time window). No effect on datasets \
+                without noise events. Default: True.",
+        ),
+        "benign_training": Arg(
+            bool,
+            desc="Drops the events labelled malicious from the graphs of the train and val dates, so \
+                that models are trained and validated on benign events only (datasets with event \
+                labels whose train or val dates have attacks). No effect on other datasets and \
+                dates. Default: True.",
+        ),
+        "edge_type": Arg(
+            str,
+            vals=OR(sorted({c for schema in SCHEMAS.values() for c in schema.edge_type_choices})),
+            desc="Edge attribute used as edge type by graphs and models (e.g. the type predicted by \
+                `predict_edge_type`). `operation` is the default type of events of the dataset \
+                (e.g. system calls in provenance datasets), other values are categorical edge \
+                attributes of the dataset's schema (e.g. `logon_type` in LANL).",
+        ),
         "node_label_features": {
-            "subject": Arg(
-                str,
-                vals=AND(["auto", "type", "path", "cmd_line"]),
-                desc="Which features use for process nodes. Features will be concatenated. Use 'auto' to include type always and other attributes only when non-null.",
-            ),
-            "file": Arg(
-                str,
-                vals=AND(["auto", "type", "path"]),
-                desc="Which features use for file nodes. Features will be concatenated. Use 'auto' to include type always and other attributes only when non-null.",
-            ),
-            "netflow": Arg(
-                str,
-                vals=AND(["auto", "type", "remote_ip", "remote_port"]),
-                desc="Which features use for netflow nodes. Features will be concatenated. Use 'auto' to include type always and other attributes only when non-null.",
-            ),
+            # One entry per node type of the dataset schemas (see `pidsmaker/config/schemas.py`)
+            **NODE_LABEL_FEATURES_CFG,
         },
         "null_label_tokens": Arg(
             bool,
@@ -1250,13 +1542,62 @@ TASK_ARGS = {
         "used_methods": Arg(
             str,
             vals=AND(
-                ["undirected", "dag", "rcaid_pseudo_graph", "none"]
+                ["undirected", "dag", "rcaid_pseudo_graph", "merge_edges", "none"]
                 + list(SYNTHETIC_ATTACKS.keys())
             ),
             desc="Applies transformations to graphs after their construction. Multiple transformations can be applied sequentially. Example: `used_methods=undirected,dag`",
         ),
         "rcaid_pseudo_graph": {
-            "use_pruning": Arg(bool),
+            "use_pruning": Arg(
+                bool,
+                desc="Whether roots reaching more than `prune_threshold` of the nodes of the graph \
+                    get no pseudo edges (R-Caid's pruning of highly-connected roots).",
+            ),
+            "prune_threshold": Arg(
+                float,
+                desc="Fraction of the nodes of the graph above which the descendants of a root are \
+                    pruned (0.5 for DARPA TC in the paper).",
+            ),
+            "root_node_types": Arg(
+                str,
+                desc="Comma-separated node types that can be roots (e.g. `file,netflow`: files and \
+                    sockets, as in the paper), or `all`.",
+            ),
+            "keep_original_edges": Arg(
+                bool,
+                desc="Whether the transformed graph keeps the edges of the provenance graph next to \
+                    the pseudo edges (root -> descendant), which have no edge type. If False, only \
+                    the pseudo edges are kept.",
+            ),
+            "merge_same_label_roots": Arg(
+                bool,
+                desc="Whether the pseudo edges of the roots with the same type and label (thus the \
+                    same features) towards a same node are merged into one, from the first such root.",
+            ),
+            "max_roots_per_node": Arg(
+                int,
+                desc="Maximum number of pseudo-roots of a node (0: no limit): its roots with the \
+                    fewest descendants. Bounds the pseudo edges by this number times the number of \
+                    nodes, e.g. when a process reads thousands of files that become roots of all \
+                    its descendants.",
+            ),
+        },
+        "merge_edges": {
+            "per_edge_type": Arg(
+                bool,
+                desc="Whether repeated edges are merged per edge type (one edge per source, \
+                    destination and type) or regardless of their type (one edge per source and \
+                    destination, as in Euler). Merged edges have a `count` and a `weight` attribute.",
+            ),
+            "aggregate_attributes": Arg(
+                bool,
+                desc="Whether the edge attributes of a merged edge (`batching.edge_features=edge_attrs`) \
+                    aggregate all its events, as the edge features of Euler, Argus and LARES: the number \
+                    of events, the number of events with each value of each categorical attribute \
+                    (e.g. successful and failed logons) and the number, mean and std of the values of \
+                    numeric attributes, each standardized over the edges of the graph as \
+                    sigmoid(floor(x / std)). Otherwise, the attributes of the first event are kept.",
+            ),
         },
         **SYNTHETIC_ATTACKS,
     },
@@ -1302,6 +1643,14 @@ TASK_ARGS = {
     },
     "feat_inference": {
         "to_remove": Arg(bool),  # TODO: remove
+        "edge_attributes": Arg(
+            str,
+            desc="Edge attributes of the dataset's schema used as edge features \
+                (`batching.edge_features=edge_attrs`): `all`, a comma-separated list of attribute \
+                names (names absent from the dataset are ignored), or lists per dataset, e.g. \
+                `LANL:success;OPTC_NET:src_port,dst_port,protocol` (unlisted datasets use all their \
+                attributes).",
+        ),
         "continue_pretrain": Arg(bool, desc="Continue pretraining on the target dataset before inference. Default: False."),
         "continue_pretrain_epochs": Arg(int, desc="Number of epochs for continue-pretraining on target dataset. Default: 3."),
         "continue_pretrain_lr_factor": Arg(float, desc="LR multiplier relative to original peak LR (e.g., 0.1 = 10x lower). Default: 0.1."),
@@ -1328,15 +1677,32 @@ TASK_ARGS = {
                                     `node_emb` refers to the embedding generated during the `featurization` task, `only_ones` is a vector of ones \
                                     with length `node_type`, `edges_distribution` counts emitted and received edges.",
         ),
+        "edges_distribution_scaling": Arg(
+            str,
+            vals=OR(["max", "none", "log1p"]),
+            desc="Scaling of the `edges_distribution` counts: `max` divides them by the largest count of \
+                the time window (default), `none` keeps the raw counts (as ThreaTrace), `log1p` applies log(1 + x).",
+        ),
         "edge_features": Arg(
             str,
-            vals=AND(["edge_type", "edge_type_triplet", "msg", "time_encoding", "none"]),
+            vals=AND(["edge_type", "edge_type_triplet", "msg", "time_encoding", "edge_attrs", "none"]),
             desc="Edge features to used during GNN training. `edge_type` refers to the system call type, `edge_type_triplet` \
                                 considers a same edge type as a new type if source or destination node types are different, `msg` is the message vector \
-                                used in the TGN, `time_encoding` encodes temporal order of events with their timestamps in the TGN, `none` uses no features.",
+                                used in the TGN, `time_encoding` encodes temporal order of events with their timestamps in the TGN, \
+                                `edge_attrs` are the edge attributes of the dataset's schema besides the edge type (one-hot categorical and \
+                                log-scaled numeric attributes, e.g. ports or logon types), `none` uses no features.",
         ),
         "multi_dataset_training": Arg(
             bool, desc="Whether the GNN should be trained on all datasets in `multi_dataset`."
+        ),
+        "compact_node_ids": Arg(
+            bool,
+            desc="Renumbers the nodes of the graphs from 0 to (number of nodes in the graphs - 1), keeping \
+                                their order, instead of using the node IDs of the database, which also count the nodes \
+                                absent from all graphs (86% of the 44.5M IDs of TRACE_E3). Tensors indexed by node (TGN \
+                                memory, neighbor loader, node ID embeddings, `all_nodes` embeddings, ...) are sized \
+                                accordingly. Node IDs are restored in the outputs. Results are unchanged, except for \
+                                methods drawing random nodes among all IDs (e.g. uniform negatives of Euler and Argus).",
         ),
         "fix_buggy_graph_reindexer": Arg(
             bool,
@@ -1403,6 +1769,18 @@ TASK_ARGS = {
                     bool,
                     desc="Whether to insert the edges of the current graph before loading last neighbors.",
                 ),
+                "reset_state_every_day": Arg(
+                    bool,
+                    desc="Empties the last neighbors and resets the TGN memory at the first batch of each day \
+                        (date of its first event), as Kairos, which trains and tests on one graph per day.",
+                ),
+                "negative_destinations": Arg(
+                    bool,
+                    desc="Draws a negative destination for each edge, uniformly among the destinations \
+                        of the training graphs (training) or of all graphs (validation, test), and adds \
+                        it to the nodes of the TGN graph to be embedded with memory and neighbors, as \
+                        TGN and Jbeil (used by `predict_edge_contrastive.neg_sampling=tgn`).",
+                ),
             },
         },
         "inter_graph_batching": {
@@ -1433,7 +1811,30 @@ TASK_ARGS = {
         ),
         "inference_device": Arg(str, vals=OR(["cpu", "cuda"]), desc="Device used during testing."),
         "fuse_duplicate_edges_training": Arg(bool, desc="During training only, keeps one edge per (source, destination) pair in each batch, so that repeated events between the same entities count once in the loss."),
-        "used_method": Arg(str, vals=OR(["default", "pretrained"]), desc="Which training pipeline use."),
+        "used_method": Arg(str, vals=OR(["default", "pretrained", "threatrace"]), desc="Which training pipeline use. \
+            `threatrace` trains ThreaTrace's successive submodels (see `training.threatrace`)."),
+        "threatrace": {
+            "ratio_threshold": Arg(
+                float,
+                desc="ThreaTrace's `thre`: a node is explained by a submodel when its type is predicted \
+                    with a top-1 / top-2 probability ratio of at least this value. Anomalous nodes are \
+                    those no submodel explains (used by `threshold_method: threatrace`).",
+            ),
+            "max_submodels": Arg(int, desc="Maximum number of submodels trained by `used_method: threatrace`."),
+            "max_retrain_epochs": Arg(
+                int, desc="Maximum number of epochs to train each submodel after the first one."
+            ),
+            "retrain_loss_threshold": Arg(
+                float,
+                desc="Training of a submodel after the first one stops once its mean loss on the nodes \
+                    not yet explained is below this value.",
+            ),
+            "max_rounds_without_progress": Arg(
+                int,
+                desc="Training stops after this number of consecutive rounds where the submodel \
+                    explains no new training node.",
+            ),
+        },
         "ocrapt_early_stop": {
             "enabled": Arg(bool, desc="Off by default, no-op unless set."),
             "patience": Arg(int),
@@ -1512,11 +1913,26 @@ TASK_ARGS = {
             desc="Whether to generate images of malicious nodes' neighborhoods (not stable).",
         ),
         "ground_truth_version": Arg(str, vals=OR(["orthrus", "reapr", "threatrace"])),
+        "evaluate_selected_epoch_only": Arg(
+            bool,
+            desc="Only evaluates the epoch selected by a label-free `best_model_selection` (`last_epoch`, \
+                `best_val_score`), instead of evaluating every epoch on the test set (faster on large \
+                test sets, without per-epoch test metrics).",
+        ),
+        "save_figures": Arg(
+            bool,
+            desc="Whether to save the figures of the evaluation (scores, ADP and discrimination \
+                curves) for each evaluated epoch. Metrics are computed either way. Figures with \
+                one point per edge or node are slow to draw on large test sets.",
+        ),
         "best_model_selection": Arg(
             str,
-            vals=OR(["best_adp", "best_discrimination", "best_ap@10", "fixed_budget"]),
-            desc="fixed_budget evaluates only the final predetermined training epoch. Strategy to select the best model across epochs. `best_adp` selects the best model based on the highest ADP score, `best_discrimination` \
-                                    selects the model that does the best separation between top-score TPs and top-score FPs.",
+            vals=OR(["best_adp", "best_discrimination", "best_ap@10", "best_val_score", "best_mcc", "last_epoch", "fixed_budget"]),
+            desc="Strategy to select the best model across epochs. `best_adp` selects the best model based on the highest ADP score, `best_discrimination` \
+                                    selects the model that does the best separation between top-score TPs and top-score FPs. These two use test labels. \
+                                    `best_val_score` selects the model with the best score on validation data computed by the objective \
+                                    (link prediction AUC + AP of validation edges for `predict_edge_contrastive`), as Euler's early stopping. \
+                                    `last_epoch` selects the last evaluated epoch (no labels used). `best_mcc` selects the best MCC on the test set (as LARES' code).",
         ),
         "used_method": Arg(str),
         "node_evaluation": {
@@ -1544,6 +1960,23 @@ TASK_ARGS = {
             "ocrapt_min_contamination": Arg(
                 float,
                 desc="For threshold_method=ocrapt: min per-type contamination floor.",
+            ),
+            "magic_knn_k": Arg(
+                int,
+                desc="For threshold_method=magic: number of nearest benign training nodes whose \
+                    mean distance scores a test node (default 10, as in the MAGIC paper).",
+            ),
+            "magic_max_reference_size": Arg(
+                int,
+                desc="For threshold_method=magic: the k-NN reference set is a random sample of at most \
+                    this many benign training node embeddings (0: all of them).",
+            ),
+            "magic_embedding": Arg(
+                str,
+                vals=OR(["last", "concat"]),
+                desc="For threshold_method=magic: node embedding scored by the k-NN detector, the output \
+                    of the last encoder layer (`last`, MAGIC's code) or the concatenation of all its \
+                    layers (`concat`, MAGIC's paper).",
             ),
         },
         "tw_evaluation": {
@@ -1577,6 +2010,21 @@ TASK_ARGS = {
             "provnet_lof_queue": {
                 "queue_arg": Arg(str),
             },
+        },
+        "host_two_stage_evaluation": {
+            "alpha": Arg(int, desc="Number of top host scores clustered by K-means in the first stage (LARES: 3)."),
+            "beta": Arg(int, desc="Number of top outgoing edges predicted malicious per selected host (LARES: 350)."),
+            "root_attack_nodes": Arg(
+                str,
+                desc="Comma-separated index IDs of the root sources of the attacks: only their malicious \
+                    edges are positives, as LARES. `dataset`: the `root_attack_nodes` of the dataset (9660 \
+                    on LANL, 201,402,501 on OpTC flows). Empty: all malicious edges.",
+            ),
+            "test_end": Arg(
+                str,
+                desc="End of the evaluated test period (`%Y-%m-%d %H:%M:%S` in the dataset's timezone). \
+                    Empty: the whole test period.",
+            ),
         },
         "edge_evaluation": {
             "malicious_edge_selection": Arg(

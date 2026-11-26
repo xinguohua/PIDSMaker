@@ -1,5 +1,4 @@
 import os
-import shutil
 from itertools import product
 
 import pytest
@@ -13,7 +12,8 @@ from pidsmaker.config import (
     get_yml_cfg,
 )
 
-TESTS_ARTIFACT_DIR = os.path.join("/home/artifacts/", "tests2/")
+# Set by `framework_setup_teardown` (see the `artifact_dir` fixture of conftest.py)
+TESTS_ARTIFACT_DIR = None
 
 
 def prepare_cfg(
@@ -26,6 +26,7 @@ def prepare_cfg(
     objective=None,
     decoder=None,
     custom_args=None,
+    save_figures=False,
 ):
     input_args = [model, dataset]
     args, _ = get_runtime_required_args(return_unknown_args=True, args=input_args)
@@ -45,9 +46,17 @@ def prepare_cfg(
     if encoder and "tgn" not in encoder:
         args.__dict__["batching.intra_graph_batching.used_methods"] = "edges"
 
+    # Plotting dominates the evaluation time: figures are only tested by `TestEvaluationFigures`
+    args.__dict__["evaluation.save_figures"] = save_figures
+
     if custom_args:
         for k, v in custom_args:
             args.__dict__[k] = v
+
+    # The node type is the label of `predict_node_type`: it cannot be a node feature
+    objectives = args.__dict__.get("training.decoder.used_methods") or ""
+    if "predict_node_type" in objectives and args.__dict__.get("batching.node_features") is None:
+        args.__dict__["batching.node_features"] = "node_emb"
 
     cfg = get_yml_cfg(args)
     cfg._test_mode = True
@@ -59,14 +68,11 @@ def prepare_cfg(
 
 
 @pytest.fixture(scope="session", autouse=True)
-def framework_setup_teardown():
-    # Runs before tests
-    shutil.rmtree(TESTS_ARTIFACT_DIR, ignore_errors=True)
+def framework_setup_teardown(artifact_dir):
+    global TESTS_ARTIFACT_DIR
+    TESTS_ARTIFACT_DIR = artifact_dir
     wandb.init(mode="disabled")
-
     yield
-    # Runs after tests
-    shutil.rmtree(TESTS_ARTIFACT_DIR)
 
 
 @pytest.fixture(scope="class")
@@ -117,6 +123,7 @@ class TestFeaturization:
         "flash",
         "alacarte",
         "temporal_rw",
+        "graph2vec",
     ]
 
     @pytest.mark.parametrize("featurization", featurizations)
@@ -242,8 +249,14 @@ class TestCleaning:
 
 
 class TestEncoderObjective:
-    # `tgn` is a wrapper, covered by test_encoder_tgn_objective_pairs below.
-    encoders = [e for e in ENCODERS_CFG.keys() if e != "tgn"]
+    # `tgn` is a wrapper, covered by test_encoder_tgn_objective_pairs below. `node_id_embedding`
+    # and `snapshot_gru` wrap another encoder too, covered by test_snapshot_wrappers_objective_pairs.
+    # `textrcnn` embeds snapshots, not nodes: it is covered by TestProGrapher.
+    encoders = [
+        e
+        for e in ENCODERS_CFG.keys()
+        if e not in ("tgn", "node_id_embedding", "snapshot_gru", "textrcnn")
+    ]
     objectives = [
         "predict_node_type",
         "reconstruct_node_embeddings",
@@ -268,6 +281,13 @@ class TestEncoderObjective:
         cfg = prepare_cfg(
             "tests", dataset, device=device, encoder=encoder_combined, objective=objective, custom_args=custom_args
         )
+        main.main(cfg)
+
+    @pytest.mark.parametrize("objective", objectives)
+    def test_snapshot_wrappers_objective_pairs(self, dataset, device, objective):
+        # Encoder of Euler: GCN over node ID embeddings, followed by a GRU over the graphs
+        encoder = "gcn,node_id_embedding,snapshot_gru"
+        cfg = prepare_cfg("tests", dataset, device=device, encoder=encoder, objective=objective)
         main.main(cfg)
 
 
@@ -401,12 +421,37 @@ class TestSystems:
         "threatrace",
         "rcaid",
         "ocrapt",
+        "shadewatcher",
+        "prographer",
     ]
 
     @pytest.mark.parametrize("system", systems)
     def test_systems(self, dataset, device, system):
         cfg = prepare_cfg(system, dataset, device=device)
         main.main(cfg)
+
+    def test_shadewatcher_node_id_embedding(self, dataset, device):
+        # ShadeWatcher with a learned embedding of each entity ID concatenated to its features
+        custom_args = [("training.encoder.used_methods", "shadewatcher,node_id_embedding")]
+        cfg = prepare_cfg("shadewatcher", dataset, device=device, custom_args=custom_args)
+        main.main(cfg)
+
+
+class TestEvaluationFigures:
+    @pytest.mark.parametrize(
+        "evaluation,figure",
+        [
+            ("node_evaluation", "adp_curve_model_epoch_0.png"),
+            ("edge_evaluation", "adp_curve_model_epoch_0.png"),
+            ("tw_evaluation", "pr_curve_model_epoch_0.png"),
+            ("node_tw_evaluation", "pr_curve_model_epoch_0.png"),
+        ],
+    )
+    def test_evaluation_figures(self, dataset, device, evaluation, figure):
+        custom_args = [("evaluation.used_method", evaluation)]
+        cfg = prepare_cfg("tests", dataset, device=device, custom_args=custom_args, save_figures=True)
+        main.main(cfg)
+        assert os.path.exists(os.path.join(cfg.evaluation._precision_recall_dir, figure))
 
 
 class TestPretrainedEncoders:
@@ -416,11 +461,15 @@ class TestPretrainedEncoders:
     model_types = ["spider", "bert", "deepwalk", "graphmae"]
 
     @staticmethod
-    def pretraining_args(dataset):
+    def pretraining_args(dataset, model_type="spider"):
+        # Token budget of about two epochs on the test graphs (each epoch ends with a KNN
+        # evaluation, which dominates the pretraining time). An epoch of spider has ~7k tokens and
+        # its best checkpoints are only saved at the end of an epoch.
+        pretrain_tokens = 10000 if model_type == "spider" else 1500
         return [
             ("featurization.pretrained.pretrain_datasets", dataset),
-            ("featurization.pretrained.training.pretrain_tokens", 20000),
-            ("featurization.pretrained.training.warmup_tokens", 2000),
+            ("featurization.pretrained.training.pretrain_tokens", pretrain_tokens),
+            ("featurization.pretrained.training.warmup_tokens", pretrain_tokens // 10),
             ("featurization.pretrained.deepwalk.epochs", 1),
             ("featurization.pretrained.graphmae.epochs", 1),
         ]
@@ -430,7 +479,7 @@ class TestPretrainedEncoders:
 
     @pytest.mark.parametrize("model_type", model_types)
     def test_pretrained_featurization(self, dataset, device, model_type):
-        custom_args = self.pretraining_args(dataset) + [
+        custom_args = self.pretraining_args(dataset, model_type) + [
             ("featurization.pretrained.model_type", model_type),
             ("featurization.tokenization.used_method", self.tokenizations.get(model_type, "bpe")),
         ]
@@ -462,7 +511,8 @@ class TestPretrainedEncoders:
         main.main(cfg)
 
     def test_finetune_as_detector(self, dataset, device):
-        custom_args = self.pretraining_args(dataset) + [("training.pretrained.finetune_epochs", 1)]
+        # cybergfm pretrains a BERT
+        custom_args = self.pretraining_args(dataset, "bert") + [("training.pretrained.finetune_epochs", 1)]
         cfg = prepare_cfg("cybergfm", dataset, device=device, custom_args=custom_args)
         main.main(cfg)
 
@@ -527,7 +577,26 @@ class TestCombinations:
                 ("training.decoder.predict_edge_type.balanced_loss", True),
             ],
             [("training.decoder.predict_edge_type.balanced_loss", True)],
+            *[
+                [
+                    ("training.decoder.predict_edge_type.loss", "AMS"),
+                    ("training.decoder.predict_edge_type.AMS.version", version),
+                    ("training.decoder.predict_edge_type.AMS.margin", 0.2),
+                    ("training.decoder.predict_edge_type.AMS.scale", 30),
+                ]
+                for version in [1, 2]
+            ],
             [("training.encoder.tgn.use_residual_norm", True)],
+            # BPR loss of ShadeWatcher with the negatives of other systems
+            [
+                ("training.decoder.used_methods", "predict_edge_contrastive"),
+                ("training.decoder.predict_edge_contrastive.loss", "bpr"),
+            ],
+            [
+                ("training.decoder.used_methods", "predict_edge_contrastive"),
+                ("training.decoder.predict_edge_contrastive.loss", "bpr"),
+                ("training.decoder.predict_edge_contrastive.neg_sampling", "uniform"),
+            ],
             [("batching.edge_features", "time_encoding")],
             [("evaluation.used_method", "tw_evaluation")],
             [
@@ -545,6 +614,7 @@ class TestCombinations:
     @pytest.mark.parametrize("use_residual_norm", [False, True])
     def test_tgn_memory_with_node_features(self, dataset, device, use_residual_norm):
         from pidsmaker.tasks.batching import get_preprocessed_graphs
+        from pidsmaker.utils.data_utils import materialize_batch
 
         custom_args = [
             ("training.encoder.tgn.use_memory", True),
@@ -559,6 +629,7 @@ class TestCombinations:
         train_data, val_data, test_data, _ = get_preprocessed_graphs(cfg)
         for graphs in train_data + val_data + test_data:
             for g in graphs:
+                g = materialize_batch(g)  # features may be stored in a shared table
                 src, dst = g.reindexed_edge_index_tgn
                 assert g.x_tgn.shape[0] == g.x_from_tgn.shape[0] == g.n_id_tgn.shape[0]
                 assert torch.equal(g.n_id_tgn[src], g.original_edge_index[0])
@@ -751,3 +822,93 @@ class TestCombinations:
         cfg = prepare_cfg("tests", dataset, device=device, custom_args=custom_args)
         with pytest.raises(ValueError, match="Decoder `none` of objective `reconstruct_node_features`"):
             main.main(cfg)
+
+
+class TestProGrapher:
+    """ProGrapher: graph2vec snapshot embeddings, TextRCNN and key indicators."""
+
+    @pytest.mark.parametrize(
+        "custom_args",
+        [
+            # Entity-level evaluation from the key indicators, with the top-4 RSGs of the paper
+            [
+                ("evaluation.used_method", "node_evaluation"),
+                ("training.decoder.predict_snapshot_embedding.top_k", 4),
+            ],
+            # ReLU recurrence of the TextRCNN equations, transductive graph2vec
+            [
+                ("training.encoder.textrcnn.rnn_type", "rnn"),
+                ("featurization.training_split", "all"),
+                ("evaluation.used_method", "node_tw_evaluation"),
+            ],
+        ],
+    )
+    def test_prographer_options(self, dataset, device, custom_args):
+        custom_args = custom_args + [("training.num_epochs", 2), ("featurization.epochs", 2)]
+        cfg = prepare_cfg("prographer", dataset, device=device, custom_args=custom_args)
+        main.main(cfg)
+
+    def test_textrcnn_requires_graph2vec(self, dataset, device):
+        custom_args = [
+            ("training.decoder.used_methods", "predict_snapshot_embedding"),
+            ("batching.intra_graph_batching.used_methods", "none"),
+        ]
+        cfg = prepare_cfg(
+            "tests", dataset, device=device, encoder="textrcnn", custom_args=custom_args
+        )
+        with pytest.raises(ValueError, match="graph2vec"):
+            main.main(cfg)
+
+    def test_rooted_subgraphs(self):
+        import numpy as np
+
+        from pidsmaker.featurization.featurization_methods.featurization_graph2vec import (
+            rooted_subgraphs,
+        )
+
+        # p0 -READ-> f1, p0 -WRITE-> f2, and the same graph with other node and edge orders
+        labels = rooted_subgraphs(
+            ["subject", "file", "file"], np.array([0, 0]), np.array([1, 2]), ["READ", "WRITE"], 2
+        )
+        permuted = rooted_subgraphs(
+            ["file", "file", "subject"], np.array([2, 2]), np.array([1, 0]), ["WRITE", "READ"], 2
+        )
+        assert labels.shape == (3, 3)
+        assert list(labels[0]) == ["subject", "file", "file"]
+        # Files differ by their edge types from depth 1, the process is the same in both graphs
+        assert labels[1, 1] != labels[1, 2]
+        assert list(permuted[:, 2]) == list(labels[:, 0])
+        assert sorted(permuted[2, :2]) == sorted(labels[2, 1:])
+
+    def test_textrcnn_short_sequences(self):
+        from types import SimpleNamespace
+
+        from pidsmaker.encoders import TextRCNN
+        from pidsmaker.objectives import SnapshotEmbeddingPrediction
+
+        torch.manual_seed(0)
+        encoder = TextRCNN(emb_dim=8, hid_dim=4, num_layers=2, sequence_length=3, dropout=0.2)
+        # RSG 0 is aligned with the deviation, RSG 1 opposed to it
+        objective = SnapshotEmbeddingPrediction(torch.tensor([[1.0] * 8, [-1.0] * 8]))
+        for i in range(5):  # fewer, then more snapshots than `sequence_length`
+            batch = SimpleNamespace(
+                graph_emb=torch.full((1, 8), float(i)),
+                original_n_id=torch.tensor([3, 7]),
+                # node 3: RSGs 1 (depth 0) and 0 (depth 1), node 7: RSG 1 and an unseen RSG
+                snapshot_rsg=torch.tensor([[[3, 1, 0], [7, 1, -1]]], dtype=torch.int32),
+            )
+            res = encoder(batch=batch, edge_index=torch.tensor([[0], [1]]))
+            assert res["h"].shape == (1, 8) and res["h_src"].shape == (1, 8)
+            assert len(encoder.history) == min(i + 1, 3)
+            loss = objective(h=res["h"], inference=False, batch=batch)["loss"]
+            loss.backward()
+
+        with torch.no_grad():
+            pred = torch.full((1, 8), -10.0)  # the actual embedding (4) is above the prediction
+            scores = objective(h=pred, inference=True, validation=True, batch=batch)["loss"]
+        error = torch.linalg.vector_norm(batch.graph_emb - pred)
+        # Node 3 is rooted at the top RSG: it gets the snapshot error, node 7 half of it
+        assert torch.allclose(scores, torch.stack([error, error / 2]))
+        assert objective.get_val_score() == pytest.approx(-error.item())
+        encoder.reset_state()
+        assert encoder.history == []

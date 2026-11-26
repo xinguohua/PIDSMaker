@@ -9,6 +9,10 @@ The pipeline executes 8 tasks sequentially: construction → transformation →
 featurization → feat_inference → batching → training → evaluation → triage
 """
 
+# First: sets the CPU threads before torch is imported (see pidsmaker/__init__.py)
+import pidsmaker  # noqa: F401
+
+# isort: split
 import argparse
 import copy
 import os
@@ -39,6 +43,7 @@ from pidsmaker.experiments.uncertainty import (
     push_best_files_to_wandb,
     update_cfg_for_uncertainty_exp,
 )
+from pidsmaker.utils.loss_files import prune_non_best_epochs
 from pidsmaker.tasks import (
     batching,
     construction,
@@ -49,7 +54,7 @@ from pidsmaker.tasks import (
     transformation,
     triage,
 )
-from pidsmaker.utils.utils import log, remove_underscore_keys, set_seed
+from pidsmaker.utils.utils import log, remove_underscore_keys, set_seed, warn_if_low_memory
 
 
 def get_task_to_module(cfg):
@@ -125,6 +130,7 @@ def main(cfg, project=None, exp=None, sweep_id=None, stop_after=None, **kwargs):
         **kwargs: Additional keyword arguments
     """
     set_seed(cfg)
+    warn_if_low_memory()
 
     def run_task(task: str, cfg, method=None, iteration=None):
         """Execute a single pipeline task with restart logic and timing.
@@ -190,6 +196,10 @@ def main(cfg, project=None, exp=None, sweep_id=None, stop_after=None, **kwargs):
         times = {
             f"time_{task}": round(results["time"], 2) for task, results in task_results.items()
         }
+        log("Task times (s): " + ", ".join(f"{k[5:]}={v}" for k, v in times.items()))
+
+        if getattr(cfg, "_keep_best_epoch_only", False):
+            prune_non_best_epochs(cfg, metrics)
         return metrics, times
 
     def run_pipeline_with_experiments(cfg):

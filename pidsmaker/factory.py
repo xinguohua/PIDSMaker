@@ -9,22 +9,30 @@ import os
 import torch
 import torch.nn as nn
 
-from pidsmaker.config import ENCODER_WRAPPERS, OBJECTIVES_NODE_LEVEL, decoder_matches_objective
+from pidsmaker.config import (
+    ENCODER_WRAPPERS,
+    OBJECTIVES_NODE_LEVEL,
+    OBJECTIVES_WITHOUT_DECODER,
+    decoder_matches_objective,
+)
 from pidsmaker.decoders import *
+from pidsmaker.detection.flash_detection import FlashScorer
+from pidsmaker.detection.magic_knn import MagicScorer
+from pidsmaker.detection.node_scoring import NodeScorer
+from pidsmaker.detection.threatrace_detection import ThreaTraceScorer
 from pidsmaker.encoders import *
 from pidsmaker.experiments.uncertainty import add_dropout_to_model
 from pidsmaker.losses import *
 from pidsmaker.model import Model
 from pidsmaker.objectives import *
 from pidsmaker.tgn import IdentityMessage, LastAggregator, TGNMemory, TimeEncodingMemory
-from pidsmaker.utils.data_utils import GraphReindexer
+from pidsmaker.utils.data_utils import GraphReindexer, materialize_batch, to_original_node_ids
 from pidsmaker.utils.dataset_utils import (
     get_node_map,
     get_num_edge_type,
+    get_edge_attrs_dim,
+    get_possible_events,
     get_rel2id,
-    possible_events,
-    with_fork_event,
-    OPTC_DATASETS,
 )
 from pidsmaker.hetero import get_metadata
 
@@ -36,7 +44,7 @@ def build_model(data_sample, device, cfg, max_node_num, all_data=None):
     `all_data` is an optional tuple (val_data, test_data) used by the
     predict_edge_supervised objective to extract attack edge features.
     """
-    msg_dim, edge_dim, in_dim = get_dimensions_from_data_sample(data_sample)
+    msg_dim, edge_dim, in_dim = get_dimensions_from_data_sample(materialize_batch(data_sample))
 
     graph_reindexer = GraphReindexer(
         device=device,
@@ -55,7 +63,7 @@ def build_model(data_sample, device, cfg, max_node_num, all_data=None):
     )
     objectives = objective_factory(
         cfg, in_dim=in_dim, graph_reindexer=graph_reindexer, device=device,
-        all_data=all_data,
+        all_data=all_data, edge_dim=edge_dim,
     )
     objective_few_shot = few_shot_decoder_factory(
         cfg, device=device, graph_reindexer=graph_reindexer
@@ -106,7 +114,7 @@ def encoder_block_factory(cfg, msg_dim, in_dim, edge_dim, device, max_node_num):
         "event_type_encoding" in cfg.training.encoder.used_methods
     )
 
-    node_map = get_node_map(from_zero=True)
+    node_map = get_node_map(cfg, from_zero=True)
 
     # If edge features are used, we set them here
     # edge_dim = 0
@@ -156,15 +164,11 @@ def encoder_block_factory(cfg, msg_dim, in_dim, edge_dim, device, max_node_num):
                 concat=cfg.training.encoder.graph_attention.concat,
                 flow=cfg.training.encoder.graph_attention.flow,
                 num_layers=cfg.training.encoder.graph_attention.num_layers,
+                final_activation=bool(cfg.training.encoder.graph_attention.final_activation),
             )
         elif method == "hetero_graph_transformer":
-            if cfg.dataset.name in OPTC_DATASETS:
-                raise NotImplementedError(
-                    "Hetero OPTC not implemented (need to compute possible_events)"
-                )
-
-            node_map = get_node_map(from_zero=True)
-            metadata = get_metadata(with_fork_event(possible_events, cfg), node_map)
+            node_map = get_node_map(cfg, from_zero=True)
+            metadata = get_metadata(get_possible_events(cfg), node_map)
 
             encoder = HeteroGraphTransformer(
                 in_dim=in_dim,
@@ -174,6 +178,46 @@ def encoder_block_factory(cfg, msg_dim, in_dim, edge_dim, device, max_node_num):
                 metadata=metadata,
                 device=device,
                 node_map=node_map,
+            )
+        elif method == "egraphsage":
+            encoder = EGraphSAGE(
+                in_dim=in_dim,
+                hid_dim=node_hid_dim,
+                out_dim=node_out_dim,
+                edge_dim=edge_dim or None,
+                activation=activation_fn_factory(cfg.training.encoder.egraphsage.activation),
+                dropout=dropout,
+                num_layers=cfg.training.encoder.egraphsage.num_layers,
+                undirected=cfg.training.encoder.egraphsage.undirected is not False,
+            )
+        elif method == "argus":
+            encoder = ArgusEncoder(
+                in_dim=in_dim,
+                hid_dim=node_hid_dim,
+                out_dim=node_out_dim,
+                edge_dim=edge_dim or None,
+                num_layers=cfg.training.encoder.argus.num_layers,
+                dropout=dropout,
+            )
+        elif method == "lares":
+            lares_cfg = cfg.training.encoder.lares
+            encoder = LaresEncoder(
+                in_dim=in_dim,
+                out_dim=node_out_dim,
+                num_nodes=max_node_num,
+                edge_dim=edge_dim or None,
+                dropout=dropout,
+                flow=(lares_cfg.flow or "target_to_source").strip(),
+                use_node_features=bool(lares_cfg.use_node_features),
+            )
+        elif method == "gcn":
+            encoder = GCN(
+                in_dim=in_dim,
+                hid_dim=node_hid_dim,
+                out_dim=node_out_dim,
+                activation=activation_fn_factory(cfg.training.encoder.gcn.activation),
+                dropout=dropout,
+                num_layers=cfg.training.encoder.gcn.num_layers,
             )
         elif method == "sage":
             encoder = SAGE(
@@ -233,6 +277,19 @@ def encoder_block_factory(cfg, msg_dim, in_dim, edge_dim, device, max_node_num):
             )
 
         # System-specific encoders
+        elif method == "shadewatcher":
+            sw_cfg = cfg.training.encoder.shadewatcher
+            encoder = ShadeWatcherEncoder(
+                in_dim=in_dim,
+                emb_dim=node_hid_dim,
+                out_dim=node_out_dim,
+                num_edge_types=get_num_edge_type(cfg),
+                hidden_dims=parse_int_list(sw_cfg.hidden_dims),
+                kg_dim=sw_cfg.kg_dim,
+                kg_neg_ratio=sw_cfg.kg_neg_ratio,
+                kg_margin=sw_cfg.kg_margin,
+                dropout=dropout,
+            )
         elif method == "glstm":
             encoder = GLSTM(
                 in_features=in_dim,
@@ -248,11 +305,14 @@ def encoder_block_factory(cfg, msg_dim, in_dim, edge_dim, device, max_node_num):
                 num_edge_type=max(15, get_num_edge_type(cfg) + 1),
             ).to(device)
         elif method == "rcaid_gat":
+            rcaid_cfg = cfg.training.encoder.rcaid_gat
             encoder = RCaidGAT(
                 in_dim=in_dim,
                 hid_dim=node_hid_dim,
                 out_dim=node_out_dim,
                 dropout=dropout,
+                num_layers=getattr(rcaid_cfg, "num_layers", None) or 2,
+                num_heads=getattr(rcaid_cfg, "num_heads", None) or 1,
             )
         elif method == "sum_aggregation":
             encoder = SumAggregation(
@@ -261,25 +321,32 @@ def encoder_block_factory(cfg, msg_dim, in_dim, edge_dim, device, max_node_num):
                 out_dim=node_out_dim,
             )
         elif method == "magic_gat":
-            n_layers = cfg.training.encoder.magic_gat.num_layers
-            n_heads = cfg.training.encoder.magic_gat.num_heads
-            negative_slope = cfg.training.encoder.magic_gat.negative_slope
-            assert node_hid_dim % n_heads == 0, "Invalid shape dim for number of heads"
-
             encoder = MagicGAT(
                 in_dim=in_dim,
                 hid_dim=node_hid_dim,
                 out_dim=node_out_dim,
-                n_layers=n_layers,
-                n_heads=n_heads,
+                n_layers=cfg.training.encoder.magic_gat.num_layers,
+                n_heads=cfg.training.encoder.magic_gat.num_heads,
                 feat_drop=0.1,
                 attn_drop=0.0,
-                negative_slope=negative_slope,
-                concat_out=True,
+                negative_slope=cfg.training.encoder.magic_gat.negative_slope,
                 residual=True,
                 activation=activation_fn_factory(cfg.training.encoder.magic_gat.activation),
                 is_decoder=False,
-                edge_dim=edge_dim or 0,  # Pass the calculated edge dimension
+                edge_dim=edge_dim or None,
+            )
+
+        # Sequence model over the graph2vec embeddings of the last snapshots (ProGrapher)
+        elif method == "textrcnn":
+            check_snapshot_batching(cfg)
+            textrcnn_cfg = cfg.training.encoder.textrcnn
+            encoder = TextRCNN(
+                emb_dim=cfg.featurization.emb_dim,
+                hid_dim=node_hid_dim,
+                num_layers=textrcnn_cfg.num_layers,
+                sequence_length=textrcnn_cfg.sequence_length,
+                dropout=dropout,
+                rnn_type=textrcnn_cfg.rnn_type.strip(),
             )
 
         # MLP encoders
@@ -311,13 +378,14 @@ def inner_encoder_factory(cfg, in_dim, encoder, original_edge_dim, node_map, edg
             out_dim=in_dim,
             encoder=encoder,
             activation=True,
+            num_node_types=cfg.dataset.num_node_types,
         )
 
     if use_event_type_encoding:
         encoder = EventLinearEncoder(
             in_dim=original_edge_dim,
             out_dim=in_dim,
-            possible_events=with_fork_event(possible_events, cfg),
+            possible_events=get_possible_events(cfg),
             node_map=node_map,
             edge_map=edge_map,
             encoder=encoder,
@@ -341,13 +409,36 @@ def encoder_factory(cfg, msg_dim, in_dim, edge_dim, device, max_node_num, graph_
     node_out_dim = cfg.training.node_out_dim
     dropout = cfg.training.encoder.dropout
     use_tgn = "tgn" in cfg.training.encoder.used_methods
-    node_map = get_node_map(from_zero=True)
+    node_map = get_node_map(cfg, from_zero=True)
     edge_map = get_rel2id(cfg, from_zero=True)
         
-    encoder = encoder_block_factory(cfg, msg_dim, in_dim, edge_dim, device, max_node_num)
+    # Learned node ID embeddings are concatenated to the input node features
+    use_node_id_embedding = "node_id_embedding" in cfg.training.encoder.used_methods
+    node_id_dim = cfg.training.encoder.node_id_embedding.dim if use_node_id_embedding else 0
+    encoder_in_dim = in_dim + node_id_dim
+
+    encoder = encoder_block_factory(cfg, msg_dim, encoder_in_dim, edge_dim, device, max_node_num)
     tgn_pre_encoder = None
             
-    encoder = inner_encoder_factory(cfg, in_dim, encoder, edge_dim, node_map, edge_map, max_node_num, device)
+    encoder = inner_encoder_factory(cfg, encoder_in_dim, encoder, edge_dim, node_map, edge_map, max_node_num, device)
+
+    if use_node_id_embedding:
+        encoder = NodeIdEmbedding(
+            encoder,
+            num_nodes=max_node_num,
+            dim=node_id_dim,
+            all_nodes=bool(cfg.training.encoder.node_id_embedding.all_nodes),
+        )
+    if "snapshot_gru" in cfg.training.encoder.used_methods:
+        gru_cfg = cfg.training.encoder.snapshot_gru
+        encoder = SnapshotGRU(
+            encoder,
+            num_nodes=max_node_num,
+            in_dim=node_out_dim,
+            out_dim=node_out_dim,
+            hidden_dim=gru_cfg.hidden_dim,
+            dropout=gru_cfg.dropout or 0.0,
+        )
     
     tgn_cfg = cfg.training.encoder.tgn
     time_dim = tgn_cfg.tgn_time_dim
@@ -408,7 +499,9 @@ def encoder_factory(cfg, msg_dim, in_dim, edge_dim, device, max_node_num, graph_
     return encoder
 
 
-def decoder_factory(method, objective, cfg, in_dim, out_dim, device, objective_cfg=None):
+def decoder_factory(
+    method, objective, cfg, in_dim, out_dim, device, objective_cfg=None, edge_dim=None
+):
     """Build decoder for specified objective and method.
 
     Args:
@@ -449,25 +542,24 @@ def decoder_factory(method, objective, cfg, in_dim, out_dim, device, objective_c
             device=device,
         )
     elif method == "magic_gat":
-        n_layers = decoder_cfg.num_layers
-        n_heads = decoder_cfg.num_heads
-        negative_slope = decoder_cfg.negative_slope
-
+        # MAGIC's feature decoder: the concatenated encoder layers (`in_dim`) are projected to
+        # `node_out_dim` (`encoder_to_decoder`), then decoded by a GAT without final activation
         return MagicGAT(
             in_dim=in_dim,
-            hid_dim=in_dim,
+            hid_dim=cfg.training.node_hid_dim,
             out_dim=out_dim,
-            n_layers=n_layers,
-            n_heads=n_heads,
+            n_layers=decoder_cfg.num_layers,
+            n_heads=decoder_cfg.num_heads,
             feat_drop=0.1,
             attn_drop=0.0,
-            negative_slope=negative_slope,
-            concat_out=True,
+            negative_slope=decoder_cfg.negative_slope,
             residual=True,
             activation=activation_fn_factory(
                 decoder_cfg.activation or cfg.training.encoder.magic_gat.activation
             ),
             is_decoder=True,
+            edge_dim=edge_dim,
+            in_proj_dim=cfg.training.node_out_dim,
         )
     elif method == "none":
         if in_dim != out_dim:
@@ -507,9 +599,10 @@ def _load_attack_features(cfg, edge_scores_path, top_n, all_data):
     for split_data in all_data:          # (val_data, test_data)
         for dataset in split_data:       # list of datasets (multi-dataset)
             for g in dataset:            # individual time-window batches
+                g = materialize_batch(g)
                 # original_edge_index holds global IDs (before reindexing);
                 # g.src/g.dst have been overwritten with local 0..N-1 indices.
-                orig_ei = g.original_edge_index.cpu()
+                orig_ei = to_original_node_ids(g.original_edge_index).cpu()
                 src_np = orig_ei[0].numpy()
                 dst_np = orig_ei[1].numpy()
                 t_np = g.t.cpu().numpy()
@@ -595,8 +688,9 @@ def _load_attack_features_from_patterns(cfg, attack_patterns, max_edges_per_patt
                 for g in dataset:
                     if collected >= max_edges_per_pattern:
                         break
+                    g = materialize_batch(g)
 
-                    orig_ei  = g.original_edge_index.cpu()
+                    orig_ei  = to_original_node_ids(g.original_edge_index).cpu()
                     src_ids  = orig_ei[0].tolist()
                     dst_ids  = orig_ei[1].tolist()
                     etypes   = g.edge_type  # (E, num_edge_types)
@@ -673,7 +767,7 @@ def _load_attack_features_from_synthetic(cfg, attack_edges_path):
         )
     synth_embs = torch.load(synth_emb_path, map_location="cpu")  # {(ntype, label): np.ndarray}
 
-    ntype2oh = gen_relation_onehot(get_node_map())    # {type_str -> 1-D LongTensor}
+    ntype2oh = gen_relation_onehot(get_node_map(cfg))    # {type_str -> 1-D LongTensor}
     etype2oh = gen_relation_onehot(get_rel2id(cfg))   # {event_str -> 1-D LongTensor}
 
     node_feats_str = cfg.batching.node_features
@@ -727,20 +821,32 @@ def _load_attack_features_from_synthetic(cfg, attack_edges_path):
     return torch.stack(atk_x_src_list), torch.stack(atk_x_dst_list), torch.stack(atk_edge_type_list)
 
 
-def objective_factory(cfg, in_dim, graph_reindexer, device, objective_cfg=None, all_data=None):
+def encoder_out_dim(cfg):
+    """Size of the node embeddings `h` returned by the encoder."""
+    if "magic_gat" in cfg.training.encoder.used_methods:
+        # MAGIC's encoder returns the concatenation of all its layers
+        n_layers = cfg.training.encoder.magic_gat.num_layers
+        return (n_layers - 1) * cfg.training.node_hid_dim + cfg.training.node_out_dim
+    return cfg.training.node_out_dim
+
+
+def objective_factory(cfg, in_dim, graph_reindexer, device, objective_cfg=None, all_data=None, edge_dim=None):
     if objective_cfg is None:
         objective_cfg = cfg.training.decoder
-    node_out_dim = cfg.training.node_out_dim
+    # Size of the node embeddings `h` given to the decoders
+    node_out_dim = encoder_out_dim(cfg)
     node_hid_dim = cfg.training.node_hid_dim
 
-    entity_map = get_node_map(from_zero=True)
+    entity_map = get_node_map(cfg, from_zero=True)
     event_map = get_rel2id(cfg, from_zero=True)
 
     objectives = []
     for objective in map(lambda x: x.strip(), objective_cfg.used_methods.split(",")):
         method = getattr(getattr(objective_cfg, objective.strip()), "decoder")
 
-        if not decoder_matches_objective(decoder=method, objective=objective):
+        if objective not in OBJECTIVES_WITHOUT_DECODER and not decoder_matches_objective(
+            decoder=method, objective=objective
+        ):
             raise ValueError(f"Decoder {method} doesn't match with objective {objective}")
 
         if objective == "reconstruct_node_features":
@@ -823,13 +929,35 @@ def objective_factory(cfg, in_dim, graph_reindexer, device, objective_cfg=None, 
                 )
             )
 
+        elif objective == "predict_process_tag":
+            node_classes, num_known = process_tag_classes_from_cfg(cfg)
+            # One logit per process tag seen in training, plus one for the unknown tags
+            decoder = decoder_factory(
+                method, objective, cfg, in_dim=node_out_dim, out_dim=num_known + 1, device=device
+            )
+            objectives.append(
+                ProcessTagPrediction(
+                    decoder=decoder,
+                    node_classes=node_classes,
+                    num_known=num_known,
+                    balanced_loss=objective_cfg.predict_process_tag.balanced_loss,
+                    detection=(objective_cfg.predict_process_tag.detection or "loss").strip(),
+                )
+            )
+
         elif objective == "reconstruct_masked_features":
             mask_rate = objective_cfg.reconstruct_masked_features.mask_rate
 
             loss_fn = recon_loss_fn_factory(objective_cfg.reconstruct_masked_features.loss)
 
             decoder = decoder_factory(
-                method, objective, cfg, in_dim=node_out_dim, out_dim=in_dim, device=device
+                method,
+                objective,
+                cfg,
+                in_dim=node_out_dim,
+                out_dim=in_dim,
+                device=device,
+                edge_dim=edge_dim,
             )
             objectives.append(
                 GMAEFeatReconstruction(
@@ -850,6 +978,7 @@ def objective_factory(cfg, in_dim, graph_reindexer, device, objective_cfg=None, 
                 GMAEStructPrediction(
                     decoder=decoder,
                     loss_fn=loss_fn,
+                    max_samples=objective_cfg.predict_masked_struct.max_samples,
                 )
             )
 
@@ -888,12 +1017,37 @@ def objective_factory(cfg, in_dim, graph_reindexer, device, objective_cfg=None, 
                 )
             )
 
+        elif objective == "autoencode_edge_embeddings":
+            use_edge_feats = bool(objective_cfg.autoencode_edge_embeddings.use_edge_feats)
+            if use_edge_feats and not edge_dim:
+                raise ValueError(
+                    "autoencode_edge_embeddings.use_edge_feats requires edge features "
+                    "(`batching.edge_features`)."
+                )
+            objectives.append(
+                EdgeEmbAutoencoder(
+                    node_dim=node_out_dim,
+                    hid_dim=node_hid_dim,
+                    edge_dim=edge_dim or 0,
+                    use_edge_feats=use_edge_feats,
+                )
+            )
+
+        elif objective == "deep_graph_infomax":
+            objectives.append(
+                DeepGraphInfomax(
+                    embed_dim=node_out_dim,
+                    pca_components=objective_cfg.deep_graph_infomax.pca_components or 8,
+                )
+            )
+
         elif objective == "predict_edge_contrastive":
             predict_edge_method = objective_cfg.predict_edge_contrastive.decoder.strip()
 
             if predict_edge_method == "inner_product":
                 edge_decoder = EdgeInnerProductDecoder(
                     dropout=objective_cfg.predict_edge_contrastive.inner_product.dropout,
+                    negate=bool(objective_cfg.predict_edge_contrastive.inner_product.negate),
                 )
 
             else:
@@ -907,13 +1061,22 @@ def objective_factory(cfg, in_dim, graph_reindexer, device, objective_cfg=None, 
                     objective_cfg=objective_cfg,
                 )
 
-            loss_fn = bce_contrastive
+            loss_name = (objective_cfg.predict_edge_contrastive.loss or "bce").strip()
+            if loss_name == "ap":
+                margin = objective_cfg.predict_edge_contrastive.ap_margin or 0.8
+                loss_fn = lambda pos, neg, **kw: ap_contrastive(pos, neg, margin=margin, **kw)
+            elif loss_name == "bpr":
+                loss_fn = bpr_contrastive
+            else:
+                loss_fn = bce_contrastive
 
             objectives.append(
                 EdgeContrastivePrediction(
                     decoder=edge_decoder,
                     loss_fn=loss_fn,
                     graph_reindexer=graph_reindexer,
+                    neg_sampling=(objective_cfg.predict_edge_contrastive.neg_sampling or "shuffle_dst").strip(),
+                    neg_ratio=objective_cfg.predict_edge_contrastive.neg_ratio or 1.0,
                 )
             )
 
@@ -967,6 +1130,14 @@ def objective_factory(cfg, in_dim, graph_reindexer, device, objective_cfg=None, 
                 )
             )
 
+        elif objective == "predict_snapshot_embedding":
+            objectives.append(
+                SnapshotEmbeddingPrediction(
+                    rsg_vectors=load_graph2vec_rsg_vectors(cfg),
+                    top_k=objective_cfg.predict_snapshot_embedding.top_k or 0,
+                )
+            )
+
         else:
             raise ValueError(f"Invalid objective {objective}")
 
@@ -989,6 +1160,41 @@ def objective_factory(cfg, in_dim, graph_reindexer, device, objective_cfg=None, 
     return objectives
 
 
+def check_snapshot_batching(cfg):
+    """Snapshot-level components (ProGrapher) need one graph per time window."""
+    batching = cfg.batching
+    methods = {
+        "global_batching.used_method": batching.global_batching.used_method,
+        "intra_graph_batching.used_methods": batching.intra_graph_batching.used_methods,
+        "inter_graph_batching.used_method": batching.inter_graph_batching.used_method,
+    }
+    batched = [f"batching.{k}={v}" for k, v in methods.items() if (v or "none").strip() != "none"]
+    if batched:
+        raise ValueError(
+            "The `textrcnn` encoder embeds each time window as a whole (one snapshot per graph): "
+            f"set {', '.join(batched)} to `none`."
+        )
+    if cfg.featurization.used_method.strip() != "graph2vec":
+        raise ValueError(
+            "The `textrcnn` encoder predicts graph2vec snapshot embeddings: it requires "
+            "`featurization.used_method=graph2vec`."
+        )
+
+
+def load_graph2vec_rsg_vectors(cfg):
+    """(V, d) output vectors of the rooted subgraphs of the graph2vec model (ProGrapher)."""
+    from gensim.models.doc2vec import Doc2Vec
+
+    from pidsmaker.featurization.featurization_methods.featurization_graph2vec import MODEL_FILE
+
+    if cfg.featurization.used_method.strip() != "graph2vec":
+        raise ValueError(
+            "The `predict_snapshot_embedding` objective requires `featurization.used_method=graph2vec`."
+        )
+    model = Doc2Vec.load(os.path.join(cfg.featurization._model_dir, MODEL_FILE))
+    return torch.from_numpy(model.syn1neg.copy())
+
+
 def few_shot_decoder_factory(cfg, graph_reindexer, device, objective_cfg=None):
     """Build few-shot detection decoder if enabled.
 
@@ -1004,7 +1210,7 @@ def few_shot_decoder_factory(cfg, graph_reindexer, device, objective_cfg=None):
     if not cfg.training.decoder.use_few_shot:
         return None
 
-    node_out_dim = cfg.training.node_out_dim
+    node_out_dim = encoder_out_dim(cfg)
     objective_cfg = cfg.training.decoder.few_shot.decoder
 
     objective = objective_factory(
@@ -1092,6 +1298,13 @@ def special_categorical_loss_fn_factory(loss: str, out_dim: int, num_classes: in
     
     return categorical_loss_fn_factory(loss)
 
+def parse_int_list(value):
+    """Parses a list of integers given as `32,16` (read as a tuple by the config), `32` or a list."""
+    if isinstance(value, (list, tuple)):
+        return [int(v) for v in value]
+    return [int(v) for v in str(value).strip("()[] ").split(",") if v.strip()]
+
+
 def activation_fn_factory(activation: str):
     """Create activation function (sigmoid, relu, tanh, prelu, etc.).
 
@@ -1172,6 +1385,22 @@ def early_stop_tracker_factory(cfg):
     )
 
 
+def node_scorer_factory(cfg):
+    """Build the scorer of the nodes of node-level objectives, at inference and evaluation.
+
+    ThreaTrace, FLASH and MAGIC threshold scores of their own, computed at inference (see
+    `pidsmaker.detection.node_scoring`); the other threshold methods threshold the node losses.
+
+    Args:
+        cfg: Configuration, checked for `evaluation.node_evaluation.threshold_method`
+
+    Returns:
+        A `NodeScorer`
+    """
+    scorers = {"threatrace": ThreaTraceScorer, "flash": FlashScorer, "magic": MagicScorer}
+    return scorers.get(cfg.evaluation.node_evaluation.threshold_method, NodeScorer)(cfg)
+
+
 def get_dimensions_from_data_sample(data):
     """Extract dimensions from data sample for model initialization.
 
@@ -1218,6 +1447,8 @@ def get_edge_dim(cfg, msg_dim):
             if not use_tgn:
                 raise TypeError("Edge feature `time_encoding` is only available if TGN is used.")
             edge_dim += tgn_memory_dim
+        elif edge_feat == "edge_attrs":
+            edge_dim += get_edge_attrs_dim(cfg)
         elif edge_feat == "none":
             pass
         else:

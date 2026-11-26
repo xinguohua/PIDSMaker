@@ -34,11 +34,12 @@ from pidsmaker.detection.evaluation_methods.evaluation_utils import (
     plot_score_seen,
     plot_scores_neat,
     plot_scores_with_paths_node_level,
-    reduce_losses_to_score,
     transform_attack2nodes_to_node2attacks,
 )
+from pidsmaker.factory import node_scorer_factory
 from pidsmaker.utils.labelling import get_GP_of_each_attack
 from pidsmaker.detection.evaluation_methods.plot import plot_scores_distribution
+from pidsmaker.utils.loss_files import compact_int_columns, read_losses
 from pidsmaker.utils.utils import (
     get_all_graphs_for_dates,
     listdir_sorted,
@@ -111,7 +112,7 @@ def get_node_predictions(val_tw_path, test_tw_path, cfg, **kwargs):
     filelist = listdir_sorted(test_tw_path)
     dfs = []
     for tw, fname in enumerate(log_tqdm(filelist, desc="Compute labels")):
-        df = pd.read_csv(os.path.join(test_tw_path, fname))
+        df = read_losses(os.path.join(test_tw_path, fname))
         df["tw"] = tw
         dfs.append(df)
 
@@ -200,7 +201,7 @@ def get_node_predictions_node_level(val_tw_path, test_tw_path, cfg, **kwargs):
     filelist = listdir_sorted(test_tw_path)
     for tw, file in enumerate(log_tqdm(filelist, desc="Compute labels")):
         file = os.path.join(test_tw_path, file)
-        df = pd.read_csv(file).to_dict(orient="records")
+        df = read_losses(file).to_dict(orient="records")
         for line in df:
             node = line["node"]
             loss = line["loss"]
@@ -208,23 +209,18 @@ def get_node_predictions_node_level(val_tw_path, test_tw_path, cfg, **kwargs):
             node_to_values[node]["loss"].append(loss)
             node_to_values[node]["tw"].append(tw)
 
-            if "threatrace_score" in line:
-                node_to_values[node]["threatrace_score"].append(line["threatrace_score"])
-            if "correct_pred" in line:
-                node_to_values[node]["correct_pred"].append(line["correct_pred"])
-            if "flash_score" in line:
-                node_to_values[node]["flash_score"].append(line["flash_score"])
-            if "magic_score" in line:
-                node_to_values[node]["magic_score"].append(line["magic_score"])
+            # The scores of some threshold methods (see `NodeScorer.columns`)
+            for col, value in line.items():
+                if col not in ("node", "loss"):
+                    node_to_values[node][col].append(value)
 
             if loss > node_to_max_loss[node]:
                 node_to_max_loss[node] = loss
                 node_to_max_loss_tw[node] = tw
 
     # These scores are computed during the inference of the training task, only for this threshold method
-    score_col = {"threatrace": "threatrace_score", "flash": "flash_score", "magic": "magic_score"}.get(
-        threshold_method
-    )
+    scorer = node_scorer_factory(cfg)
+    score_col = scorer.score_column
     if score_col and any(len(values[score_col]) == 0 for values in node_to_values.values()):
         raise ValueError(
             f"Threshold method `{threshold_method}` requires the `{score_col}` computed during the "
@@ -237,48 +233,7 @@ def get_node_predictions_node_level(val_tw_path, test_tw_path, cfg, **kwargs):
     use_kmeans = cfg.evaluation.node_evaluation.use_kmeans
     results = defaultdict(dict)
     for node_id, losses in node_to_values.items():
-        threatrace_label = 0
-        flash_label = 0
-        detected_tw = None
-        if cfg.evaluation.node_evaluation.threshold_method == "threatrace":
-            max_score = 0
-            pred_score = max(losses["threatrace_score"])
-
-            for score, node_type_pred, tw in zip(
-                losses["threatrace_score"], losses["correct_pred"], losses["tw"]
-            ):
-                if score > thr and node_type_pred and score > max_score:
-                    threatrace_label = 1
-                    max_score = score
-                    detected_tw = tw
-
-        elif cfg.evaluation.node_evaluation.threshold_method == "flash":
-            max_score = 0
-            pred_score = max(losses["flash_score"])
-
-            for score, node_type_pred, tw in zip(
-                losses["flash_score"], losses["correct_pred"], losses["tw"]
-            ):
-                if score > thr and node_type_pred and score > max_score:
-                    flash_label = 1
-                    max_score = score
-                    detected_tw = tw
-
-        elif cfg.evaluation.node_evaluation.threshold_method == "magic":
-            max_score = 0
-            pred_score = max(losses["magic_score"])
-
-            for score, tw in zip(losses["magic_score"], losses["tw"]):
-                if score > thr and score > max_score:
-                    flash_label = 1
-                    max_score = score
-                    detected_tw = tw
-
-        else:
-            pred_score = reduce_losses_to_score(
-                losses["loss"],
-                cfg.evaluation.node_evaluation.threshold_method,
-            )
+        pred_score, flagged, detected_tw = scorer.node_prediction(losses, thr)
 
         results[node_id]["decision_threshold"] = (thr_by_type.get(node_to_type.get(node_id), thr)
                                                    if thr_by_type is not None else thr)
@@ -288,7 +243,8 @@ def get_node_predictions_node_level(val_tw_path, test_tw_path, cfg, **kwargs):
         results[node_id]["is_seen"] = int(str(node_id) in train_node_set)
 
         # We need the detected TW range to check if the detected node spans in an attack TW
-        detected_tw = detected_tw or node_to_max_loss_tw.get(node_id, None)
+        if detected_tw is None:  # not `or`: the first time window has the index 0
+            detected_tw = node_to_max_loss_tw.get(node_id, None)
         if detected_tw is not None:
             results[node_id]["time_range"] = [
                 datetime_to_ns_time_US_handle_nano(tw, timezone=cfg.dataset.timezone) for tw in filelist[detected_tw].split("~")
@@ -299,15 +255,11 @@ def get_node_predictions_node_level(val_tw_path, test_tw_path, cfg, **kwargs):
         if use_kmeans:  # in this mode, we add the label after
             results[node_id]["y_hat"] = 0
         else:
-            if cfg.evaluation.node_evaluation.threshold_method == "threatrace":
-                results[node_id]["y_hat"] = threatrace_label
-            elif cfg.evaluation.node_evaluation.threshold_method == "flash":
-                results[node_id]["y_hat"] = flash_label
-            elif thr_by_type is not None:
+            if thr_by_type is not None:
                 node_thr = thr_by_type.get(node_to_type.get(node_id), thr)
                 results[node_id]["y_hat"] = int(pred_score > node_thr)
             else:
-                results[node_id]["y_hat"] = int(pred_score > thr)
+                results[node_id]["y_hat"] = int(flagged)
 
     if use_kmeans:
         results = compute_kmeans_labels(
@@ -366,7 +318,7 @@ def main(
     if edge_records is not None:
         edge_scores_file = os.path.join(out_dir, f"edge_scores_{model_epoch_dir}.pkl")
         edge_df = edge_records if isinstance(edge_records, pd.DataFrame) else pd.DataFrame(edge_records)
-        torch.save(edge_df, edge_scores_file)
+        torch.save(compact_int_columns(edge_df), edge_scores_file)
         log(f"Saved {len(edge_df)} edge scores to {edge_scores_file}")
     # pr_img_file = os.path.join(out_dir, f"pr_curve_{model_epoch_dir}.png")
     adp_img_file = os.path.join(
@@ -414,32 +366,35 @@ def main(
                     attack_to_TPs[att] += 1
 
     # Plots the PR curve and scores for mean node loss
-    log(f"Saving figures to {out_dir}...")
+    save_figures = cfg.evaluation.save_figures is not False  # unset: saved
+    if save_figures:
+        log(f"Saving figures to {out_dir}...")
     # plot_precision_recall(pred_scores, y_truth, pr_img_file)
     adp_score = plot_detected_attacks_vs_precision(
-        pred_scores, nodes, node2attacks, y_truth, adp_img_file
+        pred_scores, nodes, node2attacks, y_truth, adp_img_file if save_figures else None
     )
     discrim_scores = compute_discrimination_score(pred_scores, nodes, node2attacks, y_truth)
-    plot_discrimination_metric(pred_scores, y_truth, discrim_img_file)
     discrim_tp = compute_discrimination_tp(pred_scores, nodes, node2attacks, y_truth)
     tp_per_attack = compute_tp_per_attack_thr(pred_scores, nodes, node2attacks, y_truth, thr)
-    # plot_simple_scores(pred_scores, y_truth, simple_scores_img_file)
-    plot_scores_with_paths_node_level(
-        pred_scores,
-        y_truth,
-        nodes,
-        max_val_loss_tw,
-        tw_to_malicious_nodes,
-        node2attacks,
-        scores_img_file,
-        cfg,
-        thr,
-    )
-    plot_scores_neat(pred_scores, y_truth, nodes, node2attacks, neat_scores_img_file, thr)
-    # plot_score_seen(pred_scores, is_seen, seen_score_img_file)
-    node_to_type = {nid: info["type"] for nid, info in node_to_path.items()}
-    plot_scores_distribution(pred_scores, y_truth, nodes, node2attacks, distrib_img_file,
-                             node_to_type=node_to_type)
+    if save_figures:
+        plot_discrimination_metric(pred_scores, y_truth, discrim_img_file)
+        # plot_simple_scores(pred_scores, y_truth, simple_scores_img_file)
+        plot_scores_with_paths_node_level(
+            pred_scores,
+            y_truth,
+            nodes,
+            max_val_loss_tw,
+            tw_to_malicious_nodes,
+            node2attacks,
+            scores_img_file,
+            cfg,
+            thr,
+        )
+        plot_scores_neat(pred_scores, y_truth, nodes, node2attacks, neat_scores_img_file, thr)
+        # plot_score_seen(pred_scores, is_seen, seen_score_img_file)
+        node_to_type = {nid: info["type"] for nid, info in node_to_path.items()}
+        plot_scores_distribution(pred_scores, y_truth, nodes, node2attacks, distrib_img_file,
+                                 node_to_type=node_to_type)
     
     stats = classifier_evaluation(y_truth, y_preds, pred_scores)
 
@@ -501,7 +456,8 @@ def main(
     )
 
     stats["scores_file"] = scores_file
-    stats["neat_scores_img_file"] = neat_scores_img_file
+    if save_figures:
+        stats["neat_scores_img_file"] = neat_scores_img_file
     
     gnn_models_dir = cfg.training._trained_models_dir
     model_path = os.path.join(gnn_models_dir, model_epoch_dir)

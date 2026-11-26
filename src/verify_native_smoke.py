@@ -15,6 +15,7 @@ def main():
  p=argparse.ArgumentParser();p.add_argument('--cell',type=Path,required=True);p.add_argument('--server-config',type=Path,required=True);p.add_argument('--full',action='store_true');p.add_argument('--repair-predictions',action='store_true');p.add_argument('--check-only',action='store_true');a=p.parse_args()
  out=Path(os.environ['RUN_OUTPUT_DIR']);out.mkdir(parents=True,exist_ok=True);cell=a.cell
  assert json.loads((cell/'status.json').read_text())['state']=='pipeline_finished_pending_acceptance'
+ from pidsmaker.utils.data_utils import to_original_node_ids, materialize_batch
  from pidsmaker.tasks.batching import get_preprocessed_graphs
  from pidsmaker.factory import build_model
  from pidsmaker.utils.utils import get_device,set_seed,ns_time_to_datetime_US
@@ -76,7 +77,7 @@ def main():
   if reuse:assert edges==reuse['splits'][split]['edges'], 'Preprocessed edge coverage mismatch: '+split
   coverage[split]={'batches':len(batches),'edges':edges,'independent_tensor_identity_checked':True,'prepared_windows':reuse['splits'][split]['windows'] if reuse else None,'unscored_preprocessed_edges':0}
  def native_ids(g):
-  return getattr(g,'original_n_id_tgn',g.original_n_id) if profile['scoring']=='node' else g.original_edge_index.flatten()
+  return to_original_node_ids(getattr(g,'original_n_id_tgn',g.original_n_id) if profile['scoring']=='node' else g.original_edge_index.flatten())
  expected_nodes={int(n) for group in test for g in group for n in native_ids(g).cpu().tolist()}
  scored_nodes={json.loads(line)['node_id'] for line in (cell/'objects.jsonl').open()}
  if not a.repair_predictions:assert expected_nodes==scored_nodes, 'Scored node universe differs from independent test tensors'
@@ -92,11 +93,9 @@ def main():
  restored=restore_replay_state(model,Path(checkpoint).parent/'replay_state.pt',required=model_name!='velox')
  changed=[k for k,v in model.named_parameters() if k in initial and not torch.nn.parameter.is_lazy(v) and not torch.equal(initial[k],v.detach().cpu())]
  assert changed, 'No learned parameter differs from seeded initialization'
- original_magic=Path(cfg.training._magic_dir)/'train_distance.txt' if model_name=='magic' else None
- if model_name=='magic' and not a.check_only:cfg.training._magic_dir=str(out/'magic_replay')
  cfg.training._edge_losses_dir=str(out/'replay_losses')
  wandb.init(mode='disabled')
- stats={'inference_repeated':False} if a.check_only else inference_loop.main(cfg,model,val,test,cfg.training.num_epochs-1,'all')
+ stats={'inference_repeated':False} if a.check_only else inference_loop.main(cfg,model,val,test,cfg.training.num_epochs-1,'all',train_data=train)
  from pidsmaker.utils.prediction_identity import prediction_name
  def compare_inputs(directory):
   evidence={}
@@ -104,6 +103,7 @@ def main():
    names=[];rows=0
    for gi,group in enumerate(dataset):
     for bi,g in enumerate(group):
+     g=materialize_batch(g)
      end=g.t[-1] if profile['scoring']=='node' else g.t.max()
      interval=ns_time_to_datetime_US(g.t[0],timezone=cfg.dataset.timezone)+'~'+ns_time_to_datetime_US(end,timezone=cfg.dataset.timezone)
      name=prediction_name(interval,gi,bi)+'.csv';names.append(name)
@@ -111,7 +111,7 @@ def main():
      if not path.exists():raise ValueError('Missing stable batch identity '+name+'; legacy timestamp-only outputs require collision audit and explicit repair')
      frame=pd.read_csv(path)
      if profile['scoring']=='node':expected=pd.DataFrame({'node':native_ids(g).cpu().numpy()})
-     else:expected=pd.DataFrame({'srcnode':g.original_edge_index[0].cpu().numpy(),'dstnode':g.original_edge_index[1].cpu().numpy(),'time':g.t.cpu().numpy(),'edge_type':(g.edge_type.max(dim=1).indices+1).cpu().numpy()})
+     else:expected=pd.DataFrame({'srcnode':to_original_node_ids(g.original_edge_index[0]).cpu().numpy(),'dstnode':to_original_node_ids(g.original_edge_index[1]).cpu().numpy(),'time':g.t.cpu().numpy(),'edge_type':(g.edge_type.max(dim=1).indices+1).cpu().numpy()})
      keys=list(expected.columns)
      pd.testing.assert_frame_equal(frame[keys].sort_values(keys).reset_index(drop=True),expected.sort_values(keys).reset_index(drop=True),check_dtype=False)
      rows+=len(frame)
@@ -155,10 +155,6 @@ def main():
  assert set(right.node_id)==expected_nodes
  if not a.repair_predictions:assert replay_metrics==original_metrics
  save(out/'coverage.json',coverage)
- if model_name=='magic' and not a.check_only:
-  generated=out/'magic_replay/train_distance.txt'
-  reference=generated if a.repair_predictions else original_magic
-  np.testing.assert_allclose(np.loadtxt(generated),np.loadtxt(reference),rtol=1e-6,atol=1e-7)
  after={str(f):digest(f) for f in protected};save(out/'source_hashes_after.json',after);assert before==after
  checks={k:True for k in ['independent_coverage','model_rebuilt','scores_replayed','decisions_recomputed','source_unchanged']};checks['full_budget']=a.full;checks['scores_replayed']=not a.check_only;checks['full_predictions']=True
  save(out/'summary.json',{'state':'native_outputs_verified' if a.check_only else 'reconstruction_replay_verified','source_cell':str(cell),'checks':checks,'coverage':coverage,'metrics_recomputed':replay_metrics,'native_metrics':replay_metrics,

@@ -6,11 +6,18 @@ construction:
   use_hashed_label: False
   fuse_edge: True
   consistent_edge_types: False
+  # Edge attribute used as edge type: `operation` (default event type) or a categorical
+  # edge attribute of the dataset schema (e.g. `logon_type` for LANL)
+  edge_type: operation
+  operations: default
+  drop_noise_events: True
+  benign_training: True
   multi_dataset: none
   node_label_features:
     subject: type, path, cmd_line
     file: type, path
     netflow: type, remote_ip, remote_port
+    host: name
   # Cleaning of the raw data before building the graphs (see docs/docs/config/cleaning.md).
   # `none` builds the graphs of the original systems.
   cleaning:
@@ -48,7 +55,9 @@ featurization:
     decline_rate: 30
   doc2vec:
     include_neighbors: False
+    truncate_process_name: False
     alpha: 0.025
+    workers: 3
   alacarte:
     walk_length: 30
     num_walks: 10
@@ -76,7 +85,14 @@ featurization:
     use_pretrained_fb_model: False
   flash:
     min_count: 1
-    workers: 15
+    workers: 1
+  graph2vec:  # ProGrapher
+    wl_iterations: 4
+    negative: 15
+    min_count: 1
+    alpha: 0.025
+    infer_epochs: 100
+    num_workers: 1  # several workers make the training of gensim non-deterministic
   # Default parameters of each tokenization. Systems set `tokenization.used_method`.
   # `substitutions` lists the values replaced by placeholder tokens ([HASH], [NUM], ...), or `none`.
   tokenization:
@@ -98,9 +114,17 @@ featurization:
       max_seq_len: 64
       substitutions: none
 feat_inference:
+  edge_attributes: all
   to_remove: True
 
 training:
+  # ThreaTrace (`used_method: threatrace` and `threshold_method: threatrace`)
+  threatrace:
+    ratio_threshold: 1.5
+    max_submodels: 100
+    max_retrain_epochs: 149
+    retrain_loss_threshold: 1.0
+    max_rounds_without_progress: 3
   encoder:
     x_is_tuple: False
     graph_attention:
@@ -146,8 +170,38 @@ training:
       negative_slope: 0.2
       alpha_l: 3.0
       activation: prelu
+    rcaid_gat:
+      num_layers: 2
+      num_heads: 1
     custom_mlp:
       architecture_str: none
+    gcn:
+      activation: relu
+      num_layers: 2
+    node_id_embedding:
+      dim: 32
+      all_nodes: False
+    snapshot_gru:
+      hidden_dim: 0  # 0: node_out_dim
+      dropout: 0.0
+    egraphsage:
+      activation: relu
+      num_layers: 2
+      undirected: True
+    argus:
+      num_layers: 2
+    lares:
+      flow: target_to_source
+      use_node_features: False
+    shadewatcher:
+      hidden_dims: 32,16
+      kg_dim: 32
+      kg_neg_ratio: 2
+      kg_margin: 1.0
+    textrcnn:  # ProGrapher
+      sequence_length: 128
+      num_layers: 5
+      rnn_type: lstm
   decoder:
     predict_edge_supervised:
       decoder: edge_mlp
@@ -170,6 +224,8 @@ training:
     predict_node_type:
       decoder: node_mlp
       balanced_loss: False
+      flash_snapshots: False
+      flash_drop_conf: 0.9
       node_mlp:
         architecture_str: none
     reconstruct_node_features:
@@ -189,6 +245,10 @@ training:
         architecture_str: linear(0.5) | relu | linear(0.5) | relu | linear(0.5) | relu
         src_dst_projection_coef: 1
     predict_edge_contrastive:
+      loss: bce
+      ap_margin: 0.8
+      neg_sampling: shuffle_dst
+      neg_ratio: 1.0
       decoder: inner_product
       inner_product:
         dropout: 0.0
@@ -196,6 +256,15 @@ training:
         architecture_str: linear(0.5) | relu
         src_dst_projection_coef: 1
     
+    deep_graph_infomax:
+      decoder: none
+      pca_components: 8
+    autoencode_edge_embeddings:
+      decoder: none
+      use_edge_feats: True
+    predict_snapshot_embedding:  # ProGrapher
+      decoder: none
+      top_k: 0
     few_shot:
       include_attacks_in_ssl_training: False
       freeze_encoder: True
@@ -215,6 +284,13 @@ training:
 
 evaluation:
   best_model_selection: best_adp
+  save_figures: True
+  evaluate_selected_epoch_only: False
+  host_two_stage_evaluation:
+    alpha: 3
+    beta: 350
+    root_attack_nodes: ""
+    test_end: ""
   node_evaluation:
     threshold_method: max_val_loss
     max_val_loss:
