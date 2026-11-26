@@ -139,6 +139,9 @@ def run(args):
                    '--evaluation.best_model_selection','fixed_budget','--training.seed','0',
                    '--featurization.seed','0','--featurization.training_split','train',
                    '--training_loop.run_evaluation','each_epoch']
+        if args.model == 'magic':
+            # CUDA reductions feed the training-reference normalization used by k-NN.
+            command += ['--training.deterministic', 'true']
         if args.mode == 'smoke':
             command += ['--test_mode','--training.num_epochs','1','--featurization.epochs','1']
         if server['device'] == 'cpu':
