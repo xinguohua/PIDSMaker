@@ -23,7 +23,7 @@ def main(source,cell,out):
     assert tr.values.sum()==3426589
     main['N']=tr.sum(axis=1).reindex(pd.MultiIndex.from_frame(main[pair]),fill_value=0).values
     main['N_bin']=pd.cut(main.N,[-1,0,9,99,999,np.inf],labels=['0','1–9','10–99','100–999','≥1000'])
-    main['category']=np.select([main.N==0,main.n==0,main.n<main.maximum,main.operations==1],['unseen_pair','unseen_operation','nonmode','sole_mode'],default='multiple_ops_mode')
+    main['category']=np.select([main.N==0,main.n==0,main.n<main.maximum,pd.to_numeric(main.operations,errors="coerce")==1],['unseen_pair','unseen_operation','nonmode','sole_mode'],default='multiple_ops_mode')
     def rates(frame,col):
         df=frame.groupby(col,observed=True).prediction.agg(['size','sum']).rename(columns={'size':'nodes','sum':'FP'})
         df['TN']=df.nodes-df.FP
