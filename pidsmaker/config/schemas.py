@@ -879,8 +879,11 @@ APT_OPERATIONS = (
     "ZEEK_SSL", "ZEEK_FILES", "ZEEK_X509", "ZEEK_OCSP", "ZEEK_DHCP", "ZEEK_SMTP", "ZEEK_PE",
 )
 _apt_types = tuple(
-    replace(HOST_NODE_TYPE, id=i, name=name, table=f"{name}_node_table")
-    for i, name in enumerate(("host", "process", "artifact", "endpoint", "observation"), 1)
+    replace(HOST_NODE_TYPE, id=i, name=name, table=f"{name}_node_table", label_format=fmt)
+    for i, (name, fmt) in enumerate((
+        ("host", "name"), ("process", "path"), ("artifact", "path"),
+        ("endpoint", "address"), ("observation", "name"),
+    ), 1)
 )
 SCHEMAS["apt_agent"] = DatasetSchema(
     name="apt_agent", node_types=_apt_types,

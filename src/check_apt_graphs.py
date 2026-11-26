@@ -5,7 +5,8 @@ import subprocess
 from pathlib import Path
 
 from pidsmaker.config import get_runtime_required_args, get_yml_cfg, set_task_to_done
-from pidsmaker.preprocessing.build_graph_methods import build_default_graphs as builder
+from pidsmaker.preprocessing.build_graph_methods import build_apt_graphs
+from pidsmaker.preprocessing.build_graph_methods.build_default_graphs import day_query_params
 from pidsmaker.utils.graph_store import load_graph_columns
 from pidsmaker.utils.utils import datetime_to_ns_time_US, get_all_graphs_for_dates, init_database_connection
 
@@ -18,15 +19,10 @@ def main():
     cfg = get_yml_cfg(args)
     if cfg.dataset.name != "APT_AGENT_AB" or cfg.construction.fuse_edge or cfg._test_mode:
         raise ValueError("Verification requires the full A/B dataset and construction.fuse_edge=False")
-    cur, con = init_database_connection(cfg)
-    try:
-        cur.execute("SELECT payload FROM apt_manifest")
-        if cur.fetchone()[0] != json.loads(Path(os.environ["PIDSMAKER_APT_MANIFEST"]).read_text()):
-            raise ValueError("Selected manifest does not match the local database")
-    finally:
-        con.close()
-    if not (Path(cfg.construction._task_path) / "done.txt").is_file():
-        builder.main(cfg)
+    if (Path(cfg.construction._task_path) / "done.txt").is_file():
+        build_apt_graphs.validate_input(cfg)
+    else:
+        build_apt_graphs.main(cfg)
     graph_dir = cfg.construction._graphs_dir
     report = dict(dataset=cfg.dataset.name, model_config=args.model,
                   commit=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
@@ -38,7 +34,7 @@ def main():
         for split in ("train", "val", "test"):
             count = windows = positives = 0
             for day in cfg.dataset[split + "_dates"]:
-                bounds = builder.day_query_params(day, lambda s: datetime_to_ns_time_US(s, timezone="UTC"))
+                bounds = day_query_params(day, lambda s: datetime_to_ns_time_US(s, timezone="UTC"))
                 cur.execute("SELECT event_uuid,label,timestamp_rec,operation,src_index_id,dst_index_id FROM event_table WHERE timestamp_rec >= %s "
                             "AND timestamp_rec < %s AND scene_id=%s" + (" AND label=0" if split != "test" else ""), bounds)
                 expected = {row[0]: row[1:] for row in cur}

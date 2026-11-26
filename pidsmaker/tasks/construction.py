@@ -1,5 +1,6 @@
 from pidsmaker.config import update_cfg_for_multi_dataset
 from pidsmaker.preprocessing.build_graph_methods import (
+    build_apt_graphs,
     build_default_graphs,
     build_magic_graphs,
 )
@@ -7,6 +8,8 @@ from pidsmaker.utils.utils import get_multi_datasets
 
 
 def main_from_config(cfg):
+    if cfg.dataset.schema == "apt_agent":
+        return build_apt_graphs.main(cfg)
     graph_method = cfg.construction.used_method
     if graph_method == "default":
         build_default_graphs.main(cfg)
