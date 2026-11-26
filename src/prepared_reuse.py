@@ -19,7 +19,11 @@ def attach_prepared(cfg,source,cell,evidence_path):
     assert meta['input_sha256']==digest(evidence_path), 'Input manifest differs'
     assert not previous['_test_mode']
     for name in ['dataset','construction','transformation']:
-        assert clean(previous[name])==clean(dict(getattr(cfg,name))), 'Effective config differs: '+name
+        old, current = clean(previous[name]), clean(dict(getattr(cfg,name)))
+        if name == 'construction' and not current.get('file_path_evidence') and not old.get('file_path_evidence'):
+            old.pop('file_path_evidence', None)
+            current.pop('file_path_evidence', None)
+        assert old==current, 'Effective config differs: '+name
     code=source.parent.parent/'code'
     checked_source={}
     for folder in ['pidsmaker/construction','pidsmaker/transformation']:

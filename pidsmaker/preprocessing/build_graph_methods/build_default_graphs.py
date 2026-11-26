@@ -15,6 +15,7 @@ import torch
 
 import pidsmaker.mimicry as mimicry
 from pidsmaker.config import get_darpa_tc_node_feats_from_cfg, get_dates_from_cfg
+from pidsmaker.preprocessing.file_paths import effective_file_path, read_evidence
 from pidsmaker.preprocessing.cleaning import Cleaner
 from pidsmaker.utils.dataset_utils import get_rel2id, rel2id_optc, OPTC_DATASETS, _has_consistent_edge_types, translate_optc_to_tc
 from pidsmaker.utils.utils import (
@@ -179,9 +180,10 @@ def compute_indexid2msg(cfg, cleaner=None, smoke_node_ids=None):
     log(f"Number of process nodes: {subject_count}")
 
     # file
+    path_evidence = read_evidence(cfg)
     file_count = 0
     for i in _stream_rows(connect, "select * from file_node_table" + (" WHERE index_id = ANY(%s)" if smoke_node_ids is not None else ""), ([int(n) for n in smoke_node_ids],) if smoke_node_ids is not None else None):
-        attrs = {"type": "file", "path": str(i[2])}
+        attrs = {"type": "file", "path": str(effective_file_path(i[0], i[2], path_evidence))}
         index_id = str(i[-1])
         node_type = attrs["type"]
         attrs = cleaner.clean_attributes(node_type, attrs)

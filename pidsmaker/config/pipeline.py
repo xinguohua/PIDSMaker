@@ -300,6 +300,9 @@ def get_hashed_construction_cfg(cfg):
     as their order has no effect.
     """
     hashed = {k: v for k, v in cfg.construction.items() if k != "cleaning"}
+    evidence = hashed.pop("file_path_evidence", None)
+    if evidence:
+        hashed["file_path_evidence"] = pathlib.Path(evidence).stem
     if cfg.dataset.name == "CADETS_E3" and cfg.dataset.num_edge_types == 11:
         hashed["native_event_vocabulary"] = "cadets_e3_with_fork"
     methods = sorted(set(get_cleaning_methods_from_cfg(cfg)))
