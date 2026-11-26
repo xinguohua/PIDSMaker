@@ -78,6 +78,12 @@ def run(args):
                 missing.add(a)
     windows = [w for w, in db.execute("select w from windows where split='test' order by w")]
     assert set(windows) <= {w for w, in counts.execute('select w from window_done')}
+    def groups(w):
+        return read_window(db,w,True,attrs,keys,preds,attack)[0]
+    if args.peak_rows:
+        from constituent_peak_check import check
+        check(args.peak_rows,args.fp_memberships,out,counts,frequency,train_actions,groups)
+        return
     flags, incomplete, anchored = {}, {}, defaultdict(list)
     novel_constituents = {}
     for k in args.lengths:
@@ -93,8 +99,6 @@ def run(args):
                     0 if seen else 2 if all(a in train_actions for a in seq) else 4))
     print('subset types',sum(map(len,anchored.values())),flush=True)
     recovered = defaultdict(set)
-    def groups(w):
-        return read_window(db,w,True,attrs,keys,preds,attack)[0]
     for i,w in enumerate(windows):
         idx = ActionIndex(groups(w))
         present = set(idx.variants)
@@ -209,4 +213,6 @@ if __name__=='__main__':
     p.add_argument('--lengths',type=int,nargs='+',choices=(2,3),default=[2,3])
     p.add_argument('--constituent-groups',action='store_true',help='Break down zero-shot node membership by constituent training support')
     p.add_argument('--node-breakdown-only',action='store_true',help='Export FP memberships and denominators for labels with false positives')
+    p.add_argument('--peak-rows',type=Path)
+    p.add_argument('--fp-memberships',type=Path)
     run(p.parse_args())
