@@ -10,7 +10,7 @@ import torch
 from neighbors import loader
 
 
-def main(root, plan_dir, out):
+def main(root, plan_dir, out, audit_only=False):
     source=root/"velox-condition-firstpaths-20261126b/output"
     run=root/"cadets-velox-firstpaths-rebuild-20261126b"
     cell,cfg,labels,ops,(train,val,test,maxnodes)=loader(run)
@@ -28,6 +28,7 @@ def main(root, plan_dir, out):
     rng=np.random.default_rng(0)
     weights={arm:[] for arm in ("competitor","random","target")}
     changed=0
+    budget={arm:dict(reduced=0.,added=0.,max_batch_error=0.) for arm in weights}
     for b,ids in zip(train[0],plan["batch_ids"]):
         assert not b.y.any()
         t=np.isin(ids,list(targets)); c=np.isin(ids,list(rivals))
@@ -49,7 +50,14 @@ def main(root, plan_dir, out):
                 w[reserve]-=delta*len(ix)/len(reserve)
                 if arm=="competitor":changed+=len(ix)
             assert abs(w.sum(dtype=float)-len(ids))<1e-3 and np.all(w>=0)
+            sums=budget[arm]
+            sums["reduced"]+=float(np.maximum(1-w,0).sum(dtype=float))
+            sums["added"]+=float(np.maximum(w-1,0).sum(dtype=float))
+            sums["max_batch_error"]=max(sums["max_batch_error"],abs(w.sum(dtype=float)-len(w)))
             weights[arm].append(torch.from_numpy(w))
+    (out/"summary.json").write_text(json.dumps(dict(targets=len(targets),rivals=len(rivals),
+        matched_competitor_edges_per_epoch=changed,per_epoch_budget=budget),indent=2))
+    if audit_only:return
     protocol=json.loads((source/"protocol.json").read_text())
     nodes=pd.read_csv(source/"nodes.csv").set_index("node")
     rows=[]
@@ -121,4 +129,4 @@ def main(root, plan_dir, out):
 
 
 if __name__=="__main__":
-    main(*map(Path,sys.argv[1:]),Path(os.environ["RUN_OUTPUT_DIR"]))
+    main(*map(Path,sys.argv[1:3]),Path(os.environ["RUN_OUTPUT_DIR"]),audit_only=sys.argv[3:]==["--audit-only"])
