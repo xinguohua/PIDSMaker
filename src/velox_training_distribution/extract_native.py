@@ -103,9 +103,6 @@ def run(cell, out, arrow_python):
             graph=torch.load(graph_file,map_location='cpu')
             assert graph.is_directed() and graph.is_multigraph()
             data=load_feature_data(tensor_file).to('cpu')
-            if 'msg_node_feats' in data:
-                from pidsmaker.utils.data_utils import expand_compact_msg
-                data=expand_compact_msg(data)
             assert set(data.keys())=={'src','dst','t','msg','y','tgn_mode'}
             assert not data.tgn_mode
             n=data.src.numel()

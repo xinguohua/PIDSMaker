@@ -140,8 +140,8 @@ def run(args):
                    '--featurization.seed','0','--featurization.training_split','train',
                    '--training_loop.run_evaluation','each_epoch']
         if args.model == 'magic':
-            # CUDA reductions feed the training-reference normalization used by k-NN.
-            command += ['--training.deterministic', 'true']
+            # Score on CPU so CUDA scatter roundoff cannot change the fitted k-NN scale.
+            command += ['--training.inference_device', 'cpu']
         if args.mode == 'smoke':
             command += ['--test_mode','--training.num_epochs','1','--featurization.epochs','1']
         if server['device'] == 'cpu':

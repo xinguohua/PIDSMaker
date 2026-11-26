@@ -83,6 +83,7 @@ from pidsmaker.utils.dataset_utils import (
     get_rel2id,
     ordered_event_triplets,
 )
+from pidsmaker.utils.feature_cache import load_feature_data
 from pidsmaker.utils.utils import (
     get_multi_datasets,
     log,
@@ -412,11 +413,10 @@ def expand_compact_msg(data):
 
 
 def load_data_list(path, split, cfg):
-    from pidsmaker.utils.feature_cache import load_feature_data
     data_list = []
     for f in sorted(os.listdir(os.path.join(path, split))):
         filepath = os.path.join(path, split, f)
-        data = expand_compact_msg(load_feature_data(filepath).to("cpu"))
+        data = load_feature_data(filepath).to("cpu")
         data_list.append(data)
 
     data_list = extract_msg_from_data(data_list, cfg)
@@ -1725,8 +1725,7 @@ def _load_data_list_shared(path, split, cfg, builder):
     data_list = []
     edge_feats_is_msg = _edge_feats_is_msg(cfg)
     for f in sorted(os.listdir(os.path.join(path, split))):
-        from pidsmaker.utils.feature_cache import load_feature_data
-        data = load_feature_data(os.path.join(path, split, f)).to("cpu")
+        data = load_feature_data(os.path.join(path, split, f), expand=False).to("cpu")
         if COMPACT_MSG_KEYS[0] not in data:
             raise _SharedFeaturesUnsupported("edge messages are not stored compactly")
         rows = torch.cat([data.msg_src_row, data.msg_dst_row]).long()

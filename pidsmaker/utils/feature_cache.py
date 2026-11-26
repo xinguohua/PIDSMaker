@@ -32,9 +32,12 @@ def save_feature_data(data, path, cache_format='dense', edge_width=None):
         data.msg = msg
 
 
-def load_feature_data(path):
+def load_feature_data(path, *, expand=True):
     payload = torch.load(path)
     if not isinstance(payload, dict) or payload.get('format') != 'node_table_v1':
+        if expand and hasattr(payload, 'msg_node_feats'):
+            from pidsmaker.utils.data_utils import expand_compact_msg
+            return expand_compact_msg(payload)
         return payload
     data = payload['data']
     data.msg = torch.cat((payload['nodes'][payload['src_index']],
