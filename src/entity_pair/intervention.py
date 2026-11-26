@@ -1,4 +1,5 @@
 """Seed-zero four-arm paired intervention on training-supported FP target pairs."""
+from io import StringIO
 import json
 import os
 from pathlib import Path
@@ -99,9 +100,18 @@ def main(root, plan_dir, out):
                 for ids in b.original_edge_index.cpu().numpy():
                     np.maximum.at(score,ids,loss)
                 b.to("cpu")
-        pred=score[nodes.index]>protocol["threshold"]
+        # Native inference writes float64 edge scores to CSV and node evaluation
+        # reads with pandas' default parser before the strict threshold comparison.
+        values,inverse=np.unique(score[nodes.index],return_inverse=True)
+        parsed=pd.read_csv(StringIO(pd.DataFrame({"loss":values}).to_csv(index=False))).loss.to_numpy()
+        actual=parsed[inverse]
+        pred=actual>protocol["threshold"]
         if arm=="original":
-            assert np.array_equal(pred,nodes.prediction)
+            bad=pred!=nodes.prediction.to_numpy()
+            print("original audit",sum(bad),np.max(abs(actual-nodes.score)),flush=True)
+            if bad.any():
+                print(nodes.loc[bad].assign(replayed=actual[bad]).head().to_string(),flush=True)
+            assert not bad.any()
         gt=nodes["gt"].to_numpy()
         rows.append(dict(arm=arm,FP=int(sum(pred&(gt==0))),TP=int(sum(pred&(gt==1))),
             TN=int(sum(~pred&(gt==0))),FN=int(sum(~pred&(gt==1))),target_right=tr_right,target_n=tr_count,
