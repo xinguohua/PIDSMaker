@@ -28,7 +28,7 @@ def main(root, out):
     load_evaluation_checkpoint(model, ck["path"])
     model.train()
     assert len(model.objectives)==1 and cfg.training.grad_accumulation==1
-    obj=model.objectives[0]
+    obj=next(m for m in model.modules() if type(m).__name__=="EdgeTypePrediction")
     assert obj.loss_fn.__name__=="cross_entropy" and not obj.balanced_loss
     keys, variants=pd.read_pickle(second/"training_variants.pkl")
     lookup={k:i for i,k in enumerate(keys)}
@@ -99,6 +99,8 @@ def main(root, out):
             if j in target_set:
                 batchsum[j]=batchsum.get(j,0)+full
         b.to("cpu")
+    pd.to_pickle(dict(keys=keys,groups=groups, batch_ids=batch_ids),out/"plan.pkl")
+    torch.save({j:v.cpu() for j,v in effective.items()},out/"effective.pt")
     rows=[]
     for i,g in groups.items():
         t=sums[i]/sum(hist[i].values())
