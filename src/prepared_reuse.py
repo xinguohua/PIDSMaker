@@ -9,6 +9,33 @@ def clean(value):
     if isinstance(value,list):return [clean(v) for v in value]
     return value
 
+def graph_source_hashes(root):
+    package = root/'pidsmaker'
+    mandatory = (
+        'tasks/construction.py', 'tasks/transformation.py',
+        'preprocessing/build_graph_methods/build_default_graphs.py',
+        'preprocessing/build_graph_methods/build_magic_graphs.py',
+        'preprocessing/cleaning.py', 'utils/utils.py', 'utils/dataset_utils.py',
+        'config/pipeline.py', 'config/config.py', 'mimicry.py',
+    )
+    paths = {package/name for name in mandatory}
+    for folder in ('preprocessing/build_graph_methods', 'preprocessing/transformation_methods'):
+        if not any((package/folder).glob('*.py')):
+            raise ValueError(f'Missing graph source directory: {package/folder}')
+    paths.update(p for p in (package/'preprocessing').rglob('*')
+                 if p.is_file() and p.suffix in {'.py', '.yml', '.yaml'})
+    return {str(p.relative_to(root)):digest(p) for p in sorted(paths)}
+
+
+def verify_graph_sources(source, current):
+    previous = graph_source_hashes(source)
+    expected = graph_source_hashes(current)
+    changed = sorted(k for k in previous.keys() | expected.keys() if previous.get(k) != expected.get(k))
+    if changed:
+        raise ValueError('Native graph source differs: ' + ', '.join(changed))
+    return previous
+
+
 def attach_prepared(cfg,source,cell,evidence_path):
     source=source.resolve()
     if cfg._test_mode:raise ValueError('Full preparation cannot be attached to smoke')
@@ -25,13 +52,7 @@ def attach_prepared(cfg,source,cell,evidence_path):
             current.pop('file_path_evidence', None)
         assert old==current, 'Effective config differs: '+name
     code=source.parent.parent/'code'
-    checked_source={}
-    for folder in ['pidsmaker/construction','pidsmaker/transformation']:
-        for old in sorted((code/folder).rglob('*')):
-            if old.is_file() and old.suffix in ['.py','.yml','.yaml']:
-                rel=old.relative_to(code);new=ROOT/rel
-                assert new.is_file() and digest(new)==digest(old), 'Native source differs: '+str(rel)
-                checked_source[str(rel)]=digest(old)
+    checked_source=verify_graph_sources(code, ROOT)
     rows=[json.loads(x) for x in (source/'windows.jsonl').read_text().splitlines()]
     bydate={r['date'] for r in rows}
     expected=set(cfg.dataset.train_dates+cfg.dataset.val_dates+cfg.dataset.test_dates)

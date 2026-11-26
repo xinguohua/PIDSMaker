@@ -300,6 +300,7 @@ def get_hashed_construction_cfg(cfg):
     as their order has no effect.
     """
     hashed = {k: v for k, v in cfg.construction.items() if k != "cleaning"}
+    hashed["construction_day_bounds"] = "local_midnight_half_open_v1"
     evidence = hashed.pop("file_path_evidence", None)
     if evidence:
         hashed["file_path_evidence"] = pathlib.Path(evidence).stem

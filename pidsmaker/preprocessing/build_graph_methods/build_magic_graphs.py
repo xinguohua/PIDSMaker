@@ -156,7 +156,7 @@ def generate_graphs(cur, uuid2type, graph_out_dir, hash2uuid, cfg):
             sql = """
             select * from event_table
             where
-                  timestamp_rec>'%s' and timestamp_rec<'%s'
+                  timestamp_rec>='%s' and timestamp_rec<'%s'
                    ORDER BY timestamp_rec;
             """ % (start_ns_timestamp, end_ns_timestamp)
             cur.execute(sql)
