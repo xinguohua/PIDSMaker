@@ -67,12 +67,15 @@ for split in ['train','test']:
     if model is None:
      model=build_model(b,device=torch.device('cuda'),cfg=cfg,max_node_num=idx.num_nodes);load_evaluation_checkpoint(model,ck['path']);model.eval()
      dec=next(m for m in model.modules() if type(m).__name__=='CustomEdgeMLP')
-     def capture_decoder(module, args, kwargs, output):
-      endpoints = tuple(kwargs[name].detach().cpu().numpy().copy() for name in ('h_src', 'h_dst'))
-      capture.append((endpoints, output.detach()))
-     dec.register_forward_hook(capture_decoder, with_kwargs=True)
+     def capture_projection(module, args):
+      capture.append(args[0].detach().cpu().numpy().copy())
+     dec.lin_src.register_forward_pre_hook(capture_projection)
+     dec.lin_dst.register_forward_pre_hook(capture_projection)
+     dec.register_forward_hook(lambda module,args,output:capture.append(output.detach()))
     with torch.no_grad():
-     capture.clear();loss=model(b,inference=True,validation=False)['loss'].flatten();inputs,logits=capture[0]
+     capture.clear();loss=model(b,inference=True,validation=False)['loss'].flatten()
+     src_input,dst_input,logits=capture
+     inputs=(src_input,dst_input)
      # These are the true decoder arguments, not a semantic proxy.
      assert np.array_equal(inputs[0],features[coords[0]]) and np.array_equal(inputs[1],features[coords[1]])
      probs=logits.softmax(1).cpu().numpy();predicted=probs.argmax(1);loss=loss.cpu().numpy()
