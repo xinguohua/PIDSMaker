@@ -98,6 +98,9 @@ decoder = next(m for m in model.modules() if type(m).__name__ == 'CustomEdgeMLP'
 capture = []
 def projection_input(module, args):
     capture.append(args[0].detach())
+encoder = next(m for m in model.modules() if type(m).__name__ == 'LinearEncoder')
+encoder.lin1.register_forward_pre_hook(projection_input)
+encoder.lin1.register_forward_hook(lambda module, args, output: capture.append(output.detach()))
 decoder.lin_src.register_forward_pre_hook(projection_input)
 decoder.lin_dst.register_forward_pre_hook(projection_input)
 decoder.register_forward_hook(lambda module, args, output: capture.append(output.detach()))
@@ -149,8 +152,9 @@ for split, dataset in [('train',train),('test',test)]:
                 with torch.no_grad():
                     capture.clear()
                     replay = model(b,inference=True,validation=False)['loss'].reshape(-1)
-                    hs,hd,logits = capture
-                    assert torch.equal(hs,b.x[src]) and torch.equal(hd,b.x[dst])
+                    encoder_input,encoded,hs,hd,logits = capture
+                    assert torch.equal(encoder_input,b.x)
+                    assert torch.equal(hs,encoded[src]) and torch.equal(hd,encoded[dst])
                     prob = logits.softmax(1)
                     guesses = prob.argmax(1).cpu().tolist()
                     true_probs = prob.gather(1,b.edge_type.argmax(1)[:,None]).flatten().cpu().tolist()
