@@ -6,7 +6,8 @@ from first_file_paths import build
 from pidsmaker.preprocessing.file_paths import effective_file_path, read_evidence
 
 
-def test_missing_file_path_requires_evidence_on_first_training_event(tmp_path):
+def test_missing_file_path_requires_evidence_on_first_training_event(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path/"data"))
     def db(name, script):
         con = sqlite3.connect(tmp_path/name)
         con.executescript(script)
@@ -34,9 +35,7 @@ def test_missing_file_path_requires_evidence_on_first_training_event(tmp_path):
     dates = ['1970-01-01']
     build(tmp_path/'events',tmp_path/'native',tmp_path/'sem',
           dict(dataset='test',task_id='t',commit='c',protocol=dict(timezone='UTC',train_dates=dates)),tmp_path/'out')
-    summary=json.loads((tmp_path/'out/summary.json').read_text())
-    cfg=SimpleNamespace(dataset=SimpleNamespace(name='test',train_dates=dates),
-                        construction=SimpleNamespace(file_path_evidence=summary['evidence']))
+    cfg=SimpleNamespace(dataset=SimpleNamespace(name='test',train_dates=dates))
     mapping=read_evidence(cfg)
     assert mapping=={'a':'/first'}
     assert effective_file_path('a','/known',mapping)=='/known'

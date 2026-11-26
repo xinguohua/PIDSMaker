@@ -299,10 +299,16 @@ def get_hashed_construction_cfg(cfg):
     existed are reused. Otherwise, only the args of the used cleaning methods are hashed, sorted
     as their order has no effect.
     """
-    hashed = {k: v for k, v in cfg.construction.items() if k != "cleaning"}
-    evidence = hashed.pop("file_path_evidence", None)
+    hashed = {k: v for k, v in cfg.construction.items() if k not in ("cleaning", "_first_file_paths")}
+    from pidsmaker.preprocessing.file_paths import evidence_path
+    evidence = evidence_path(cfg)
+    cfg.construction._first_file_paths = str(evidence) if evidence else ""
+    if cfg.dataset.name == "CADETS_E3" and not evidence:
+        hashed["file_path_evidence"] = "training_evidence_missing"
     if evidence:
         hashed["file_path_evidence"] = pathlib.Path(evidence).stem
+    if cfg.construction.used_method == "magic":
+        hashed["magic_graph_windows"] = "window_events_v2"
     if cfg.dataset.name == "CADETS_E3" and cfg.dataset.num_edge_types == 11:
         hashed["native_event_vocabulary"] = "cadets_e3_with_fork"
     methods = sorted(set(get_cleaning_methods_from_cfg(cfg)))

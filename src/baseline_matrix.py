@@ -138,9 +138,6 @@ def run(args):
                    '--evaluation.best_model_selection','fixed_budget','--training.seed','0',
                    '--featurization.seed','0','--featurization.training_split','train',
                    '--training_loop.run_evaluation','each_epoch']
-        file_evidence = server.get('file_path_evidence', {}).get(args.dataset)
-        if file_evidence:
-            command += ['--construction.file_path_evidence', file_evidence]
         if args.mode == 'smoke':
             command += ['--test_mode','--training.num_epochs','1','--featurization.epochs','1']
         if server['device'] == 'cpu':

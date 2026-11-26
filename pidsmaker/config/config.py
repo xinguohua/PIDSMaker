@@ -1205,7 +1205,6 @@ TASK_ARGS = {
         "consistent_edge_types": Arg(
             bool, desc="Map OpTC edge types to DARPA TC equivalents for shared vocabulary across datasets."
         ),
-        "file_path_evidence": Arg(str, desc="Content-addressed first-use training file path map."),
         "node_label_features": {
             "subject": Arg(
                 str,

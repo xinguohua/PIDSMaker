@@ -69,6 +69,8 @@ def build(events, native, semantic, manifest, out):
     with NamedTemporaryFile(dir=out,delete=False) as f:
         f.write(payload)
     os.replace(f.name,path)
+    from pidsmaker.preprocessing.file_paths import install_evidence
+    install_evidence(path,manifest['dataset'],train_dates)
     summary=dict(missing_file_nodes=len(nodes),unique_first_training_rows=len(lookup),counts=audit,evidence=str(path),
                  source_run=manifest['task_id'],source_commit=manifest['commit'])
     (out/'summary.json').write_text(json.dumps(summary,indent=2))
@@ -80,4 +82,6 @@ if __name__=='__main__':
     for name in ('events','native','semantic','manifest','output'):
         parser.add_argument('--'+name,type=Path,required=True)
     a=parser.parse_args()
+    import sys
+    sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
     build(a.events,a.native,a.semantic,json.loads(a.manifest.read_text()),a.output)

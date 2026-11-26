@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import networkx as nx
 import torch
 
+from pidsmaker.preprocessing.file_paths import effective_file_path, read_evidence
 from pidsmaker.config import get_darpa_tc_node_feats_from_cfg, get_dates_from_cfg
 from pidsmaker.utils.dataset_utils import get_node_map, get_rel2id
 from pidsmaker.utils.utils import (
@@ -102,6 +103,7 @@ def get_node_list(cur, cfg):
     del records
 
     # file
+    path_evidence = read_evidence(cfg)
     sql = """
     select * from file_node_table;
     """
@@ -112,7 +114,7 @@ def get_node_list(cur, cfg):
             break
         # node_uuid | hash_id | path | index_id
         for i in records:
-            attrs = {"type": "file", "path": str(i[2])}
+            attrs = {"type": "file", "path": str(effective_file_path(i[0], i[2], path_evidence))}
             node_uuid = str(i[0])
             hash_id = str(i[1])
             index_id = int(i[-1])
@@ -189,6 +191,8 @@ def generate_graphs(cur, uuid2type, graph_out_dir, hash2uuid, cfg):
                     )
                     events_list.append(event_tuple)
 
+            if not events_list:
+                continue
             start_time = events_list[0][-2]
             temp_list = []
             BATCH = 1024
@@ -214,7 +218,7 @@ def generate_graphs(cur, uuid2type, graph_out_dir, hash2uuid, cfg):
                     g = nx.DiGraph()
                     node_visited = set()
 
-                    for event_tuple in events_list:
+                    for event_tuple in temp_list:
                         (
                             src_node,
                             src_index_id,
