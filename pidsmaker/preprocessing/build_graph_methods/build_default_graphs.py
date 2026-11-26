@@ -365,7 +365,7 @@ def gen_edge_fused_tw(indexid2msg, cfg, cleaner=None, file2nodes=None, smoke_eve
 
     if smoke_events is not None:
         for day_idx, date in enumerate(dates):
-            _build_day(day_idx=day_idx, date=date, day_chunks=[smoke_events[date]],
+            _build_day(day_idx=day_idx, date=date, day_chunks=iter((smoke_events[date],)),
                        file2nodes=file2nodes, **common)
         return
 
