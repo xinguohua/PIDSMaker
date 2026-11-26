@@ -100,6 +100,23 @@ def publish_knee(cell, manifest, calibration_manifest=None, *, frozen=None, fp_p
     return report
 
 
+def knee_summary(report, directory):
+    """Default project decisions for training summaries and reconstructed replays."""
+    policy = report['policy']
+    scope = report['scope']
+    if policy['method'] != METHOD or scope not in ('independent_calibration', 'retrospective_test'):
+        raise ValueError('Unexpected default knee policy or scope')
+    metrics = report['metrics'] if scope == 'independent_calibration' else report['exploratory_metrics']
+    selected = policy['status'] == 'selected'
+    if selected != (metrics is not None) or selected != (policy['threshold'] is not None):
+        raise ValueError('Incomplete knee operating point')
+    return dict(metrics=metrics, default_metrics=metrics, default_threshold_policy=METHOD,
+                default_threshold=policy['threshold'], threshold_status=policy['status'],
+                threshold_scope=scope, threshold_report=str(directory/'report.json'),
+                default_predictions=str(directory/'objects.jsonl') if selected else None,
+                held_out_metrics=report['metrics'], exploratory_metrics=report['exploratory_metrics'])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cell', type=Path, required=True, help='Existing published node export')

@@ -165,8 +165,7 @@ attempt. Training resource gaps remain explicitly recorded in the repair lineage
 The baseline runner and its verifier apply the same cost-knee rule to the native
 node scores from Velox, OCR-APT, Orthrus, MAGIC and KAIROS. Each new cell includes
 `knee/report.json` and, for a selected cutoff, per-node `knee/objects.jsonl`.
-The summary's `default_metrics` are held-out results from this frozen threshold.
-`native_metrics` and the legacy `metrics` key refer to the original detector.
+In new run and replay summaries, `metrics` and `default_metrics` both use the selected knee. Read `threshold_scope` with the metrics. `default_predictions` points to the matching decisions. `native_metrics` records the detector-native comparison. For historical summaries, read the frozen knee report directly.
 During verification, the model is reloaded, the frozen cutoff is reused and
 the per-node knee decisions are checked.
 
@@ -180,7 +179,7 @@ same native score units and direction for each node, scored using that exact
 checkpoint. Its separate run dates must be disjoint from training and test
 dates. A missing source triggers a retrospective recommendation for the
 current scored set. This is labeled `retrospective_test`; its results are
-reported only in `exploratory_metrics` and `default_metrics` is null.
+available as the default descriptive metrics and in `exploratory_metrics`; `held_out_metrics` is null.
 A dataset without both label classes cannot establish a recall/error tradeoff.
 
 The shared cost allowance is 100 false-positive nodes per extra true-positive

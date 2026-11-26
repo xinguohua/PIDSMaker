@@ -143,7 +143,7 @@ def main():
   return target,summarize(target/'objects.jsonl')
  replay,replay_metrics=evaluate_at(losses,'corrected_export')
  assert summarize(replay/'objects.jsonl')==replay_metrics
- from baseline_knee import DEFAULT_FP_PER_TP,publish_knee
+ from baseline_knee import DEFAULT_FP_PER_TP,knee_summary,publish_knee
  frozen=json.loads(knee_path.read_text()) if knee_path.exists() else None
  # Old runs have no frozen knee; assess their corrected export as a new derived analysis.
  server=json.loads(a.server_config.read_text())
@@ -162,6 +162,5 @@ def main():
  after={str(f):digest(f) for f in protected};save(out/'source_hashes_after.json',after);assert before==after
  checks={k:True for k in ['independent_coverage','model_rebuilt','scores_replayed','decisions_recomputed','source_unchanged']};checks['full_budget']=a.full;checks['scores_replayed']=not a.check_only;checks['full_predictions']=True
  save(out/'summary.json',{'state':'native_outputs_verified' if a.check_only else 'reconstruction_replay_verified','source_cell':str(cell),'checks':checks,'coverage':coverage,'metrics_recomputed':replay_metrics,'native_metrics':replay_metrics,
-  'default_threshold_policy':knee['default_policy'],'default_metrics':knee['metrics'],'threshold_scope':knee['scope'],
-  'threshold_report':str(replay/'knee/report.json'),'exploratory_metrics':knee['exploratory_metrics'],'comparisons':comparisons,'inference':stats,'changed_parameters':changed,'model_profile':profile,'restored_state':restored,'full_accepted':False if a.repair_predictions else a.full,'repaired_predictions_verified':a.repair_predictions,'original_attempt_accepted':False,'original_metrics_for_lineage_only':original_metrics,'corrected_export':str(replay)})
+  **knee_summary(knee,replay/'knee'),'comparisons':comparisons,'inference':stats,'changed_parameters':changed,'model_profile':profile,'restored_state':restored,'full_accepted':False if a.repair_predictions else a.full,'repaired_predictions_verified':a.repair_predictions,'original_attempt_accepted':False,'original_metrics_for_lineage_only':original_metrics,'corrected_export':str(replay)})
 if __name__=='__main__':main()
