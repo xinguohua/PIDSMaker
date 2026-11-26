@@ -95,7 +95,8 @@ def main(src,out):
     degree_target=np.log1p(train[['ins','outs']].to_numpy())
     link=means(np.c_[tr['desc'][:,tr['x'].shape[1]:2*tr['x'].shape[1]],degree_target],ic,count)
     qlink=np.c_[te['desc'][queryrows,tr['x'].shape[1]:2*tr['x'].shape[1]],np.log1p(obs[['ins','outs']].to_numpy())]
-    near=[];fn_measures={}
+    near=[];fn_measures={};mal_refs=[]
+    semantic_support=train.groupby(['context','semantic']).size().to_dict()
     for space,k in [('input','desc'),('embedding','h')]:
         scale=tr[k].std(axis=0);scale[scale<1e-6]=1
         center=centers[k]/scale;query=te[k][queryrows]/scale
@@ -104,6 +105,9 @@ def main(src,out):
         sample_index=NearestNeighbors(n_neighbors=1,algorithm='brute').fit(tr[k]/scale)
         obs['nearest_train_'+space]=sample_index.kneighbors(query)[0][:,0]
         for i,r in enumerate(obs.itertuples()):
+            if r.outcome in ('FN','TP'):
+                z=j[i,0]
+                mal_refs.append(dict(node=r.id,outcome=r.outcome,space=space,nearest_context=int(ct[z]),distance=d[i,0],train_instances=int(count[z]),same_semantic_instances=semantic_support.get((ct[z],r.semantic),0),own_input_support=r.N,own_semantic_support=r.semantic_N,original_score=r.score))
             sel=np.flatnonzero(ct[j[i]]!=own[i])
             for K in (5,10,20,50):
                 positions=sel[:K];neighbors=j[i,positions]
@@ -124,6 +128,7 @@ def main(src,out):
     mal=obs[obs.outcome.isin(['FN','TP'])][['id','outcome','score','score_rank_desc','semantic_N','N','nearest_train_input','nearest_train_embedding','category']].copy()
     mal[mal.outcome=='FN'].to_csv(out/'ALL_FN_CONTEXT_EVIDENCE.csv',index=False)
     obs[obs.outcome.isin(['FP','TN'])][cols].to_csv(out/'TRAIN_TEST_LEARNING_COMPARISON.csv',index=False)
+    pd.DataFrame(mal_refs).to_csv(out/'MALICIOUS_REFERENCE_CONTEXTS.csv',index=False)
     near=pd.DataFrame(near)
     near[near.outcome.isin(['FP','TN'])].to_csv(out/'SIMILAR_CONTEXT_ANALYSIS.csv',index=False)
     details=[dict(node=n,space=s,rank=i,neighbor_context=c,N=f,distance=d,root_target_rms=a,structural_target_rms=b) for (n,s),entries in fn_measures.items() for i,(c,f,d,a,b) in enumerate(entries,1)]
