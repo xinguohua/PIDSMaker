@@ -99,6 +99,8 @@ def main(root, out):
             if j in target_set:
                 batchsum[j]=batchsum.get(j,0)+full
         b.to("cpu")
+    pd.to_pickle(dict(keys=keys,groups=groups, batch_ids=batch_ids),out/"plan.pkl")
+    torch.save({j:v.cpu() for j,v in effective.items()},out/"effective.pt")
     rows=[]
     for i,g in groups.items():
         t=sums[i]/sum(hist[i].values())
