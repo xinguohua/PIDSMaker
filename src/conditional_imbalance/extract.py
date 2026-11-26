@@ -96,9 +96,11 @@ model = build_model(train[0][0],device=device,cfg=cfg,max_node_num=max_nodes,all
 load_evaluation_checkpoint(model,ck['path'])
 decoder = next(m for m in model.modules() if type(m).__name__ == 'CustomEdgeMLP')
 capture = []
-def hook(module, args, output):
-    capture.append(tuple(t.detach() for t in (*args,output)))
-decoder.register_forward_hook(hook)
+def projection_input(module, args):
+    capture.append(args[0].detach())
+decoder.lin_src.register_forward_pre_hook(projection_input)
+decoder.lin_dst.register_forward_pre_hook(projection_input)
+decoder.register_forward_hook(lambda module, args, output: capture.append(output.detach()))
 ops = get_rel2id(cfg,from_zero=True)
 windows = [json.loads(line) for line in (cell/'windows.jsonl').open()]
 batch_size = cfg.batching.intra_graph_batching.edges.intra_graph_batch_size
@@ -147,7 +149,7 @@ for split, dataset in [('train',train),('test',test)]:
                 with torch.no_grad():
                     capture.clear()
                     replay = model(b,inference=True,validation=False)['loss'].reshape(-1)
-                    (hs,hd,logits), = capture
+                    hs,hd,logits = capture
                     assert torch.equal(hs,b.x[src]) and torch.equal(hd,b.x[dst])
                     prob = logits.softmax(1)
                     guesses = prob.argmax(1).cpu().tolist()
