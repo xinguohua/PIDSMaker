@@ -878,6 +878,17 @@ APT_OPERATIONS = (
     "SYSLOG", "WEB_ACCESS", "SHELL_HISTORY", "ZEEK_CONN", "ZEEK_DNS", "ZEEK_HTTP",
     "ZEEK_SSL", "ZEEK_FILES", "ZEEK_X509", "ZEEK_OCSP", "ZEEK_DHCP", "ZEEK_SMTP", "ZEEK_PE",
 )
+# Append relations so saved runs keep their original relation IDs.
+APT_OPERATIONS += tuple(f"SYSMON_{n}" for n in (1, 3, 5, 7, 8, 10, 11, 13, 22))
+APT_OPERATIONS += tuple(f"SECURITY_{n}" for n in (
+    4624, 4625, 4634, 4648, 4672, 4688, 4689, 4698, 4768, 4769, 4770,
+    4771, 4776, 4800, 4801, 5156,
+))
+APT_OPERATIONS += tuple("ECAR_" + pair for pair in (
+    "FILE_CREATE", "FILE_DELETE", "FILE_READ", "FILE_WRITE", "FLOW_CONNECT",
+    "MODULE_LOAD", "PROCESS_CREATE", "PROCESS_OPEN", "PROCESS_TERMINATE",
+    "REGISTRY_MODIFY", "THREAD_REMOTE_CREATE", "USER_SESSION_LOGIN", "USER_SESSION_LOGOUT",
+))
 _apt_types = tuple(
     replace(HOST_NODE_TYPE, id=i, name=name, table=f"{name}_node_table", label_format=fmt)
     for i, (name, fmt) in enumerate((

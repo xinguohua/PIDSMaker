@@ -24,11 +24,23 @@ class TestAPTParser(unittest.TestCase):
             self.assertEqual(timestamp_ns(a), 1123456700)
             self.assertEqual(project(a, xml.name, "host")[1][2], "x")
 
+    def test_explicit_windows_relations(self):
+        for number, suffix in ((8, "Guid"), (10, "GUID")):
+            row = {"EventID": number, "SourceProcess" + suffix: "{a}",
+                   "TargetProcess" + suffix: "{b}", "SourceImage": "one", "TargetImage": "two"}
+            src, dst, op = project(row, "windows_event_sysmon.xml", "h")
+            self.assertEqual((src[0], src[2], dst[0], dst[2], op),
+                             ("process", "one", "process", "two", f"SYSMON_{number}"))
+        row = dict(EventID=5156, ProcessID="4", Application="System", SourceAddress="a",
+                   SourcePort="123", DestAddress="b", DestPort="443", Protocol="6")
+        src, dst, op = project(row, "windows_event_security.xml", "h")
+        self.assertEqual((src[2], dst[2], op), ("System", "a:123 -> b:443 6", "SECURITY_5156"))
+
     def test_directed_read_and_host_scoped_process(self):
         event = dict(object="FILE", action="READ", actorID="p", objectID="f",
                      properties={"file_path": "/report", "image_path": "/reader"})
         file_node, process_node, relation = project(event, "ecar.json", "one")
-        self.assertEqual((file_node[0], process_node[0], relation), ("artifact", "process", "READ"))
+        self.assertEqual((file_node[0], process_node[0], relation), ("artifact", "process", "ECAR_FILE_READ"))
         self.assertNotEqual(process_node[1], project(event, "ecar.json", "two")[1][1])
 
 
