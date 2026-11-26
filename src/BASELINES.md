@@ -22,7 +22,7 @@ Because the command begins with `env`, the inner interpreter must be the verifie
 
 Each cell uses a new artifact directory, so no cross-version or partial stage reuse occurs. A failed job is preserved; fix the cause, commit/push, and deploy a new run ID. No pull into running directories. Full logs stay in the remote job. Inputs, configuration, seed=0, commit, package versions, device, task ID, checkpoint and output paths are recorded. Status `pipeline_finished_pending_acceptance` is deliberately not a complete experiment: check full split coverage, DB/GT mapping, and reconstructed-model checkpoint reload before acceptance.
 
-`fixed_budget` is a newly implemented, validated configuration value, not an unsupported `last` alias. It disables OCR-APT validation stopping, preserves fixed num_epochs (100 OCR-APT, 12 others), saves the final state dict, and performs validation/test inference only at that epoch. It avoids both epoch selection on test metrics and test inference between training epochs. Other selection modes are unchanged. OCR-APT's upstream calibration consults global GT UUIDs; fixed_budget instead uses the prespecified configured contamination=0.05 and per-type validation quantiles without reading GT for calibration. This threshold adaptation must be reported. Orthrus embedding fitting is restricted to train; native MAGIC test-window kNN, KAIROS online memory, and Orthrus clustering remain unchanged. No model architecture or learning objective is changed. No tuned configs are loaded.
+`fixed_budget` is a newly implemented, validated configuration value, not an unsupported `last` alias. It disables OCR-APT validation stopping, preserves fixed num_epochs (100 OCR-APT, 12 others), saves the final state dict, and performs validation/test inference only at that epoch. It avoids both epoch selection on test metrics and test inference between training epochs. Other selection modes are unchanged. OCR-APT's upstream calibration consults global GT UUIDs; fixed_budget instead uses the prespecified configured contamination=0.05 and per-type validation quantiles without reading GT for calibration. This threshold adaptation must be reported. Orthrus fits embeddings on the training split. With upstream base c4e5e00, MAGIC fits its k-NN reference on normal training embeddings and uses PIDSMaker's CPU inference option for reproducible scores. Training uses the configured training device. KAIROS applies the upstream daily reset of memory and neighbors. Use PyG 2.6.1 for this base.
 
 Objects JSONL contains all scored nodes, not just alerts, with scores (higher anomalous), decisions, labels, UUIDs, decision thresholds/rules, and available time/window mappings. Native per-window loss CSVs and graph intermediates are retained. missing_gt.json distinguishes absent DB UUIDs from mapped-but-unscored objects. It does not establish coverage of all raw objects; reconcile the DB/input manifest and graph preprocessing to identify other exclusions before acceptance. Checkpoint deserialization does not prove reconstructed-model reloadability.
 
@@ -33,7 +33,7 @@ python src/baseline_matrix.py summarize /SERVER_CELL/objects.jsonl
 
 Metrics are node-level with malicious positive. Zero denominators are JSON null (NA); no pooling with window or queue metrics. Summarize recomputes P/R/F1/FPR/FNR from exact labels. The entry remains pending real server integration; local unit checks do not establish train/val/test success.
 
-Fixed-budget checkpoints are saved after the existing evaluation transition flushes pending TGN messages, before validation. Reconstruct a fresh model from the recorded configuration and graph metadata, then use `load_evaluation_checkpoint` in `src/baseline_matrix.py` (eval before load); replay the same validation then test stream without reset. Compare scores/predictions and recompute metrics before acceptance. Deserialization or the synthetic TGN unit test alone does not meet this gate.
+Fixed-budget checkpoints are saved after the existing evaluation transition flushes pending TGN messages, before validation. Reconstruct a fresh model from the recorded configuration and graph metadata, then use `load_evaluation_checkpoint` in `src/baseline_matrix.py` (eval before load); replay the validation and test batches in native order, including configured day-boundary resets. Compare scores/predictions and recompute metrics before acceptance. Deserialization or the synthetic TGN unit test alone does not meet this gate.
 
 Exports are staged before publication. `export_complete.json` is written last and hashes each output; absent marker means unusable export. Missing optional metadata and non-finite optional values become null with per-object `export_issues`; invalid required scores or labels fail export rather than become zeros. `export_failed.json` records failure without publishing partial object files. A failed export or lost tmux process is not completion. Preserve logs/artifacts, diagnose the failed stage, commit any correction, and start a new run ID; do not rerun into the existing cell or hand-edit its status. All five resolved configurations use node_evaluation; native internal windows do not imply window-level reported metrics.
 
@@ -136,10 +136,9 @@ Non-Velox full launches remain blocked until independent model qualification;
 implemented replay profiles are not evidence that those models passed.
 
 Native checkpoint persistence now records inference-relevant non-state_dict state
-and RNG snapshots. OCR-APT restores c/r buffers and frozen-type state; Orthrus and
-KAIROS restore TGN buffers/messages and replay val then test without reset;
-MAGIC uses isolated native validation sampling/calibration and compares the
-resulting train_distance artifact. RNG snapshots document checkpoint state; native
+and RNG snapshots. OCR-APT restores c/r buffers and frozen-type state. Orthrus and
+KAIROS restore TGN state and replay the native batch order. MAGIC refits its
+k-NN reference on the frozen training inputs during replay and compares the scores. RNG snapshots document checkpoint state; native
 inference's existing set_seed reset is preserved. Fitted feature states are hashed.
 Missing required state artifacts fail explicitly rather than inventing state.
 
