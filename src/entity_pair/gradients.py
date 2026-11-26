@@ -28,7 +28,7 @@ def main(root, out):
     load_evaluation_checkpoint(model, ck["path"])
     model.train()
     assert len(model.objectives)==1 and cfg.training.grad_accumulation==1
-    obj=model.objectives[0]
+    obj=next(m for m in model.modules() if type(m).__name__=="EdgeTypePrediction")
     assert obj.loss_fn.__name__=="cross_entropy" and not obj.balanced_loss
     keys, variants=pd.read_pickle(second/"training_variants.pkl")
     lookup={k:i for i,k in enumerate(keys)}
