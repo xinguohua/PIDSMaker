@@ -34,7 +34,7 @@ def adjusted(controls,k):
     rows=[]
     for alternative in ('0','1–10','11–100'):
         sample=controls[controls.bin.isin((alternative,'>100'))]
-        groups=sample.groupby(['kind','op','action_bands','rel_bin','context_band','degree_band'])
+        groups=sample.groupby(['kind','op','action_bands','rel_bin','qc_bin','context_band','degree_band'])
         a_sum=b_sum=score=variance=0.
         overlap=Counter()
         for _,df in groups:
@@ -67,7 +67,12 @@ def summarize(root,src,out):
         maximum,hist=support_cache.get(c,(0,{}))
         return hist.get(ops[a],0)/maximum if maximum else -1
     peaks['relative']=[relative(c,a) for c,a in zip(peaks.condition,peaks.action)]
+    op_max=Counter()
+    for hist in conditions.values():
+        for op,n in hist.items():op_max[op]=max(op_max[op],n)
     peaks['op']=peaks.action.map(ops)
+    peaks['context_op_n']=[conditions.get(c,{}).get(op,0) for c,op in zip(peaks.condition,peaks.op)]
+    peaks['Qc']=peaks.context_op_n/peaks.op.map(op_max)
     normal=pd.DataFrame.from_dict(nodes,orient='index',columns=['kind','degree','score']).sort_index()
     normal.index.name='node'
     normal['FP']=normal.score>THRESHOLD
@@ -135,6 +140,7 @@ def summarize(root,src,out):
         ref=pd.DataFrame(selected,columns=[f'key{k}','bin','action_bands','action_counts'])
         control=canon.merge(ref,on=f'key{k}').set_index('node').join(normal[['degree','kind','FP']])
         control['rel_bin']=pd.cut(control.relative,[-2,-.5,0,.01,.1,.5,.9999999999,1],include_lowest=True).astype(str)
+        control['qc_bin']=pd.cut(control.Qc,[-1,0,.01,.1,.5,.9999999999,1],include_lowest=True).astype(str)
         control['context_band']=control.context_n.map(band);control['degree_band']=control.degree.map(band)
         control.to_csv(out/f'control_nodes_L{k}.csv.gz')
         controls.extend(adjusted(control,k))

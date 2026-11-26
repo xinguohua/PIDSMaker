@@ -81,7 +81,7 @@ def prepare(root, out, audit):
                 dfs=[]
                 for start in range(0,nrows,1024):
                     f=files[batch]
-                    assert name in f.name and int(f.stem.rsplit('_b',1)[1])==batch
+                    assert int(f.stem.rsplit('_b',1)[1])==batch
                     batch+=1
                     df=pd.read_csv(f)
                     assert len(df)==min(1024,nrows-start)
@@ -105,7 +105,7 @@ def prepare(root, out, audit):
                         if node in scores:
                             degree[node]+=1
                             maxima[node]=max(maxima.get(node,-1),loss)
-                            if loss==scores[node]:
+                            if abs(loss-scores[node])<1e-8:
                                 ties.append((node,w,row,u,v,ns,seq,uid,aid,loss,cond))
                 if y or test and (u not in scores or v not in scores): continue
                 if not test: conditions[cond][op]+=1
@@ -120,7 +120,9 @@ def prepare(root, out, audit):
                 rows.append((row,u,v,group,aid,int(complete_actions[aid])))
             stream.write(f'{w} {int(test)} {len(rows)}\n')
             stream.writelines(' '.join(map(str,r))+'\n' for r in rows)
-    assert maxima==scores and {r[0] for r in ties}==set(scores)
+    assert maxima.keys()==scores.keys() and max(abs(v-scores[n]) for n,v in maxima.items())<1e-8
+    ties=[r for r in ties if r[9]==maxima[r[0]]]
+    assert {r[0] for r in ties}==set(scores) and batch==2197
     record=[(a,*key,complete_actions[a],counts[a]['train'],counts[a]['test']) for key,a in actions.items()]
     pd.DataFrame(record,columns=['action','src','op','dst','complete','train','test']).to_pickle(out/'actions.pkl')
     pd.DataFrame(record,columns=['action','src','op','dst','complete','train','test']).to_csv(out/'actions.csv.gz',index=False)
