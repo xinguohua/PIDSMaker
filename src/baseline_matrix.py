@@ -186,17 +186,14 @@ def run(args):
             return
         main(cfg, exp=os.environ['RUN_ID'])
         export(cfg, cell)
-        from baseline_knee import DEFAULT_FP_PER_TP, knee_summary, publish_knee
-        manifest = json.loads((cell/'manifest.json').read_text())
-        calibration = server.get('knee_calibration_manifests', {}).get(f'{args.dataset}/{args.model}')
-        knee = publish_knee(cell, manifest, calibration,
-                            fp_per_tp=server.get('knee_fp_per_tp', DEFAULT_FP_PER_TP))
         native_metrics = json.loads((cell/'metrics.json').read_text())
         save(status, {'state':'pipeline_finished_pending_acceptance','time':now(),
              'remaining':'verify complete input/split coverage and reconstructed-model reload; smoke is never full'})
         save(out/'summary.json', {'run_id':os.environ['RUN_ID'],'cell':str(cell),
              'status':json.loads(status.read_text()),'native_metrics':native_metrics,
-             **knee_summary(knee, cell/'knee')})
+             'metrics':native_metrics,'default_metrics':native_metrics,
+             'default_threshold_policy':cfg.evaluation.node_evaluation.threshold_method,
+             'default_predictions':str(cell/'objects.jsonl')})
     except BaseException as exc:
         # Avoid writing credential-bearing exception messages to small returned results.
         save(status, {'state':'failed','time':now(),'error_type':type(exc).__name__,
