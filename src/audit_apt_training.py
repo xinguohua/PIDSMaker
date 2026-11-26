@@ -23,8 +23,8 @@ def audit(cfg, train, output):
     for dataset in train:
         for batch in dataset:
             ids = batch.edge_type.argmax(dim=1) + 1
-            for a, b, t, op in zip(to_original_node_ids(batch.src).tolist(),
-                                   to_original_node_ids(batch.dst).tolist(), batch.t.tolist(),
+            for a, b, t, op in zip(to_original_node_ids(batch.original_n_id[batch.src]).tolist(),
+                                   to_original_node_ids(batch.original_n_id[batch.dst]).tolist(), batch.t.tolist(),
                                    ids.tolist(), strict=True):
                 key = (a, b, t, op)
                 if expected[key] <= 0:
