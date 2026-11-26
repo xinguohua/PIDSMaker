@@ -67,7 +67,10 @@ for split in ['train','test']:
     if model is None:
      model=build_model(b,device=torch.device('cuda'),cfg=cfg,max_node_num=idx.num_nodes);load_evaluation_checkpoint(model,ck['path']);model.eval()
      dec=next(m for m in model.modules() if type(m).__name__=='CustomEdgeMLP')
-     dec.register_forward_hook(lambda m,i,o:capture.append((tuple(t.detach().cpu().numpy().copy() for t in i),o.detach())))
+     def capture_decoder(module, args, kwargs, output):
+      endpoints = tuple(kwargs[name].detach().cpu().numpy().copy() for name in ('h_src', 'h_dst'))
+      capture.append((endpoints, output.detach()))
+     dec.register_forward_hook(capture_decoder, with_kwargs=True)
     with torch.no_grad():
      capture.clear();loss=model(b,inference=True,validation=False)['loss'].flatten();inputs,logits=capture[0]
      # These are the true decoder arguments, not a semantic proxy.
