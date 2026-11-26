@@ -1,3 +1,5 @@
+import hashlib
+import json
 import os
 
 from datetime import date, timedelta
@@ -575,6 +577,15 @@ DATASET_DEFAULT_CONFIG = {
         "root_attack_nodes": [201, 402, 501],
     },
 }
+
+# The importer writes the exact scene-qualified split keys of the local corpus.
+if os.environ.get("PIDSMAKER_APT_MANIFEST"):
+    with open(os.environ["PIDSMAKER_APT_MANIFEST"], "rb") as stream:
+        manifest = stream.read()
+    DATASET_DEFAULT_CONFIG["APT_AGENT_AB"] = dict(
+        json.loads(manifest)["dataset"], manifest_sha256=hashlib.sha256(manifest).hexdigest()
+    )
+    del manifest
 
 # Arguments
 

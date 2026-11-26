@@ -28,18 +28,27 @@ def get_malicious_events(cfg):
         cfg.dataset.database_all_file if cfg.construction.use_all_files else cfg.dataset.database
     )
     key = (cfg.dataset.name, database, schema.name, schema.edge_type_attribute, schema.operations_sql())
+    scenes = ()
+    if schema.name == "apt_agent":
+        scenes = tuple(sorted({int(d.split("@")[1]) for d in cfg.dataset.test_dates}))
+        key += (cfg.dataset.manifest_sha256, scenes)
     if key not in _MALICIOUS_EVENTS_CACHE:
         if schema.edge_type_attribute:
             attr = schema.edge_attribute(schema.edge_type_attribute)
             type_col, encode = attr.column, attr.encode
         else:
             type_col, encode = "operation", (lambda v: v)
+        scene_filter = ""
+        params = ()
+        if scenes:
+            scene_filter = " AND scene_id = ANY(%s)"
+            params = (list(scenes),)
         cur, connect = init_database_connection(cfg)
         try:
             cur.execute(
                 f"SELECT src_index_id, dst_index_id, timestamp_rec, {type_col} "
-                f"FROM {schema.event_table} WHERE {schema.label_column} = 1{schema.operations_sql()} "
-                "ORDER BY timestamp_rec;"
+                f"FROM {schema.event_table} WHERE {schema.label_column} = 1{schema.operations_sql()}{scene_filter} "
+                "ORDER BY timestamp_rec;", params
             )
             rows = cur.fetchall()
         finally:
@@ -104,10 +113,11 @@ def ensure_ground_truth_available(cfg):
 def _test_period_ns(cfg):
     """(start, end) of the dataset's test period in ns — the single combined
     window used for the flat ThreaTrace ground truth."""
-    dates = sorted(cfg.dataset.test_dates)
+    dates = sorted(d.partition("@")[0] for d in cfg.dataset.test_dates)
+    remainder = 999_999_999 if cfg.dataset.schema == "apt_agent" else 0
     return (
         datetime_to_ns_time_US(dates[0] + " 00:00:00", timezone=cfg.dataset.timezone),
-        datetime_to_ns_time_US(dates[-1] + " 23:59:59", timezone=cfg.dataset.timezone),
+        datetime_to_ns_time_US(dates[-1] + " 23:59:59", timezone=cfg.dataset.timezone) + remainder,
     )
 
 

@@ -60,13 +60,23 @@ def events_sql(schema):
     if schema.label_column:
         extra.append(schema.label_column)
     extra_sql = "".join(f", {col}" for col in extra)
+    interval = "timestamp_rec > %s and timestamp_rec < %s"
+    if schema.name == "apt_agent":
+        interval = "timestamp_rec >= %s and timestamp_rec < %s and scene_id = %s"
     return f"""
 select NULL, src_index_id, operation, NULL, dst_index_id, event_uuid, timestamp_rec, NULL{extra_sql}
 from {schema.event_table}
 where
-      timestamp_rec > %s and timestamp_rec < %s{schema.operations_sql()}
+      {interval}{schema.operations_sql()}
        ORDER BY timestamp_rec, event_uuid;
 """
+
+
+def day_query_params(key, to_ns):
+    date, _, scene = key.partition("@")
+    next_date = datetime.strptime(date, "%Y-%m-%d") + timedelta(days=1)
+    bounds = (to_ns(f"{date} 00:00:00"), to_ns(f"{next_date:%Y-%m-%d} 00:00:00"))
+    return bounds + (int(scene),) if scene else bounds
 
 
 class DayQueryPrefetcher:
@@ -340,11 +350,7 @@ def gen_edge_fused_tw(indexid2msg, cfg, cleaner=None, file2nodes=None, smoke_eve
     # Fetch large DB chunks to minimise round-trips; no per-row generator
     # overhead — events are processed directly from list slices.
     FETCH_SIZE = 500_000
-    day_params = []
-    for date in dates:
-        date_start = f"{date} 00:00:00"
-        date_stop = f"{(datetime.strptime(date, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')} 00:00:00"
-        day_params.append((_to_ns(date_start), _to_ns(date_stop)))
+    day_params = [day_query_params(date, _to_ns) for date in dates]
     common = dict(
         cfg=cfg,
         day_params=day_params,
@@ -589,8 +595,9 @@ def _build_day_events(
         y = int(extra[-1] or 0) if has_label else 0
         return encode_attrs(extra), y
 
-    date_start = f"{date} 00:00:00"
-    date_stop = f"{(datetime.strptime(date, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')} 00:00:00"
+    calendar_date = date.partition("@")[0]
+    date_start = f"{calendar_date} 00:00:00"
+    date_stop = f"{(datetime.strptime(calendar_date, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')} 00:00:00"
 
     timestamps = [date_start, date_stop]
     test_mode_set_done = False
@@ -618,7 +625,7 @@ def _build_day_events(
                 mimicry_events.extend(attack_mimicry_events[attack_index])
             attack_index += 1
 
-        assert (start_ns_timestamp, end_ns_timestamp) == day_params[day_idx]
+        assert (start_ns_timestamp, end_ns_timestamp) == day_params[day_idx][:2]
         FETCH_SIZE = fetch_size
 
         BATCH = 1024
@@ -837,9 +844,8 @@ def main(cfg):
         with conn.cursor() as cur:
             cur.execute("SET statement_timeout='120s'; SET temp_file_limit='256MB'")
             for date in get_dates_from_cfg(cfg):
-                start = datetime_to_ns_time_US(f"{date} 00:00:00", timezone=cfg.dataset.timezone)
-                stop = start + 86400 * 1_000_000_000
-                cur.execute(events_sql(get_schema(cfg)).strip().rstrip(";") + " LIMIT 4096", (start, stop))
+                params = day_query_params(date, lambda t: datetime_to_ns_time_US(t, timezone=cfg.dataset.timezone))
+                cur.execute(events_sql(get_schema(cfg)).strip().rstrip(";") + " LIMIT 4096", params)
                 smoke_events[date] = cur.fetchall()
         conn.close()
         smoke_node_ids = sorted({int(n) for rows in smoke_events.values() for r in rows for n in (r[1], r[4])})

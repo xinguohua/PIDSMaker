@@ -870,6 +870,25 @@ HOST_NODE_TYPE = NodeTypeSchema(
     display="{name}",
 )
 
+# Local multi-source audit records. Observation edges preserve telemetry without
+# asserting an unobserved causal dependency.
+APT_OPERATIONS = (
+    "CREATE", "OPEN", "READ", "WRITE", "DELETE", "TERMINATE", "CONNECT", "LOAD",
+    "MODIFY", "REMOTE_CREATE", "LOGIN", "LOGOUT", "ECAR_OBS", "SYSMON", "SECURITY",
+    "SYSLOG", "WEB_ACCESS", "SHELL_HISTORY", "ZEEK_CONN", "ZEEK_DNS", "ZEEK_HTTP",
+    "ZEEK_SSL", "ZEEK_FILES", "ZEEK_X509", "ZEEK_OCSP", "ZEEK_DHCP", "ZEEK_SMTP", "ZEEK_PE",
+)
+_apt_types = tuple(
+    replace(HOST_NODE_TYPE, id=i, name=name, table=f"{name}_node_table")
+    for i, name in enumerate(("host", "process", "artifact", "endpoint", "observation"), 1)
+)
+SCHEMAS["apt_agent"] = DatasetSchema(
+    name="apt_agent", node_types=_apt_types,
+    rel2id={k: v for i, op in enumerate(APT_OPERATIONS, 1) for k, v in ((i, op), (op, i))},
+    possible_events={}, supports_edge_type_triplets=False, supports_hetero=False,
+    label_column="label",
+)
+
 # LANL "Comprehensive, Multi-Source Cyber-Security Events" (Kent, 2015): authentication events
 # between computers (auth.txt) and network flows between them (flows.txt), labelled by the red
 # team events (redteam.txt). Authentications have the type (`operation`) of their orientation

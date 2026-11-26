@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import networkx as nx
 
 from pidsmaker.config import get_dates_from_cfg, get_node_feats_from_cfg
+from pidsmaker.config.schemas import benign_training
 from pidsmaker.utils.dataset_utils import get_node_map, get_rel2id, get_schema, iter_nodes
 from pidsmaker.utils.graph_store import save_graph
 from pidsmaker.utils.utils import (
@@ -63,7 +64,12 @@ def generate_graphs(cur, uuid2type, graph_out_dir, hash2uuid, cfg):
     ntype2id = get_node_map(cfg)
     include_edge_type = rel2id
     node_type_dict = ntype2id
-    operations_sql = get_schema(cfg).operations_sql()
+    schema = get_schema(cfg)
+    operations_sql = schema.operations_sql()
+    scene_scoped = schema.name == "apt_agent"
+    if scene_scoped:
+        # The local import stores the node UUID itself in the event endpoints.
+        hash2uuid = {uuid: uuid for uuid in uuid2type}
 
     def get_batches(arr, batch_size):
         for i in range(0, len(arr), batch_size):
@@ -73,8 +79,9 @@ def generate_graphs(cur, uuid2type, graph_out_dir, hash2uuid, cfg):
     dates = get_dates_from_cfg(cfg)
 
     for date in dates:
-        date_start = f"{date} 00:00:00"
-        date_stop = f"{(datetime.strptime(date, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')} 00:00:00"
+        calendar_date, _, scene = date.partition("@")
+        date_start = f"{calendar_date} 00:00:00"
+        date_stop = f"{(datetime.strptime(calendar_date, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')} 00:00:00"
 
         timestamps = [date_start, date_stop]
         test_mode_set_done = False
@@ -84,13 +91,18 @@ def generate_graphs(cur, uuid2type, graph_out_dir, hash2uuid, cfg):
             stop = timestamps[i + 1]
             start_ns_timestamp = datetime_to_ns_time_US(start, timezone=cfg.dataset.timezone)
             end_ns_timestamp = datetime_to_ns_time_US(stop, timezone=cfg.dataset.timezone)
-            sql = """
-            select * from event_table
-            where
-                  timestamp_rec>'%s' and timestamp_rec<'%s'%s
-                   ORDER BY timestamp_rec;
-            """ % (start_ns_timestamp, end_ns_timestamp, operations_sql)
-            cur.execute(sql)
+            interval = "timestamp_rec > %s AND timestamp_rec < %s"
+            params = [start_ns_timestamp, end_ns_timestamp]
+            if scene_scoped:
+                interval = "timestamp_rec >= %s AND timestamp_rec < %s AND scene_id = %s"
+                params.append(int(scene))
+                if benign_training(cfg.construction) and date not in cfg.dataset.test_dates:
+                    interval += " AND label = 0"
+            cur.execute(
+                "SELECT src_node,src_index_id,operation,dst_node,dst_index_id,event_uuid,timestamp_rec,_id "
+                f"FROM event_table WHERE {interval}{operations_sql} ORDER BY timestamp_rec;",
+                params,
+            )
             events = cur.fetchall()
 
             if len(events) == 0:
