@@ -66,24 +66,31 @@ def run(args):
     attrs = {n:(signature(s),) for n,s in db.execute('select id,semantic from sem.attributes')}
     csv.field_size_limit(sys.maxsize)
     keys, frequency, missing = {}, {}, set()
+    train_actions = set()
     with (results/'ACTION_COUNTS.csv').open() as f:
         for r in csv.DictReader(f):
             a = int(r['action_id'])
             keys[r['source_semantics'],r['operation'],r['destination_semantics']] = a
             frequency[a] = int(r['test_frequency'])
+            if int(r['train_frequency']):
+                train_actions.add(a)
             if r['semantic_complete']=='0':
                 missing.add(a)
     windows = [w for w, in db.execute("select w from windows where split='test' order by w")]
     assert set(windows) <= {w for w, in counts.execute('select w from window_done')}
     flags, incomplete, anchored = {}, {}, defaultdict(list)
+    novel_constituents = {}
     for k in args.lengths:
         old = dict(counts.execute('select id,bits from node_flags where k=?',(k,)))
         flags[k] = {n:int(bool(b&1)) | (2 if b&6 else 0) for n,b in old.items()}
+        if args.constituent_groups:
+            novel_constituents[k] = {n:b&6 for n,b in old.items()}
         incomplete[k] = {n for n,b in old.items() if b&8}
         for blob, seen in counts.execute("select seq,train!='0' from counts where k=? and test!='0'",(k,)):
             seq = unpack(blob)
             if not missing.isdisjoint(seq):
-                anchored[min(seq,key=frequency.__getitem__)].append((seq,1 if seen else 2))
+                anchored[min(seq,key=frequency.__getitem__)].append((seq,1 if seen else 2,
+                    0 if seen else 2 if all(a in train_actions for a in seq) else 4))
     print('subset types',sum(map(len,anchored.values())),flush=True)
     recovered = defaultdict(set)
     def groups(w):
@@ -92,13 +99,15 @@ def run(args):
         idx = ActionIndex(groups(w))
         present = set(idx.variants)
         for anchor in present.intersection(anchored):
-            for seq,bit in anchored[anchor]:
+            for seq,bit,novel in anchored[anchor]:
                 if all(a in present for a in seq):
                     k=len(seq)
                     for variant,_,_ in idx.bounds(seq):
                         for n in idx.ends[variant]:
                             recovered[k].add(n)
                             flags[k][n] |= bit
+                            if args.constituent_groups:
+                                novel_constituents[k][n] |= novel
         if i%40==0:
             print('membership',i+1,len(windows),flush=True)
     for k in args.lengths:
@@ -119,6 +128,19 @@ def run(args):
             writer.writeheader()
             writer.writerows(rows)
     save('RQ1_Exp3_Node_Group_Statistics.csv',node_rows)
+    if args.constituent_groups:
+        memberships = []
+        totals = []
+        for k, groups_by_node in novel_constituents.items():
+            assert {n for n,b in groups_by_node.items() if b} == {n for n,b in flags[k].items() if b&2}
+            for label, bits in [('all_actions_seen',(2,6)),('has_unseen_action',(4,6)),('both',(6,))]:
+                nodes = [n for n,b in groups_by_node.items() if b in bits]
+                errors = [n for n in nodes if preds[n][1]]
+                totals.append(dict(length=k,group=label,nodes=len(nodes),FP=len(errors),TN=len(nodes)-len(errors)))
+                memberships.extend(dict(length=k,group=label,node_id=n) for n in errors)
+        save('CONSTITUENT_FP.csv',memberships)
+        save('CONSTITUENT_GROUPS.csv',totals)
+        return
     if args.node_breakdown_only:
         names = {0:'Outside',1:'Seen-only',2:'Zero-shot-only',3:'Both'}
         profile = defaultdict(Counter)
@@ -185,5 +207,6 @@ if __name__=='__main__':
     p.add_argument('--dataset',required=True)
     p.add_argument('--detector',required=True)
     p.add_argument('--lengths',type=int,nargs='+',choices=(2,3),default=[2,3])
+    p.add_argument('--constituent-groups',action='store_true',help='Break down zero-shot node membership by constituent training support')
     p.add_argument('--node-breakdown-only',action='store_true',help='Export FP memberships and denominators for labels with false positives')
     run(p.parse_args())
