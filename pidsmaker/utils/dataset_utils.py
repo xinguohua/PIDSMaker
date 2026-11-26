@@ -109,7 +109,7 @@ def iter_nodes(cfg, connect, node_types=None, fetch_size=50_000, node_ids=None):
 
     Tables are read in the order of the schema's node types, each through a server-side cursor
     so that client memory stays bounded. `attrs` maps each attribute of the node type to the
-    string of its database value, plus `type` (the node type's name).
+    string of its database value (empty for None), plus `type` (the node type's name).
 
     Args:
         cfg: config of the dataset
@@ -137,7 +137,8 @@ def iter_nodes(cfg, connect, node_types=None, fetch_size=50_000, node_ids=None):
                 for row in rows:
                     attrs = {"type": nt.name}
                     for (attr, _), value in zip(nt.columns, row[3:]):
-                        attrs[attr] = str(value)
+                        text = "" if value is None else str(value)
+                        attrs[attr] = "" if text.strip().lower() == "none" else text
                     if nt.name == "file" and path_evidence:
                         attrs["path"] = effective_file_path(str(row[0]), attrs["path"], path_evidence)
                     yield nt.name, str(row[0]), str(row[1]), row[2], attrs

@@ -429,6 +429,7 @@ def get_hashed_construction_cfg(cfg):
     as their order has no effect.
     """
     hashed = {k: v for k, v in cfg.construction.items() if k not in ("cleaning", "_first_file_paths")}
+    hashed["node_label_missing_values"] = "omit_none"
     from pidsmaker.preprocessing.file_paths import evidence_path
     evidence = evidence_path(cfg)
     cfg.construction._first_file_paths = str(evidence) if evidence else ""

@@ -31,8 +31,8 @@ def _build_label(attrs, node_type, node_label_features, use_hashed_label):
                 parts.append(val)
         label_str = " ".join(parts)
     else:
-        label_str = " ".join([attrs[f] for f in feats])
-    if use_hashed_label:
+        label_str = " ".join(filter(None, (attrs[key] for key in feats)))
+    if use_hashed_label and label_str:
         from pidsmaker.utils.utils import stringtomd5
         label_str = stringtomd5(label_str)
     return label_str

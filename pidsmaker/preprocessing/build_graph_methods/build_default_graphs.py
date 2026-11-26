@@ -179,14 +179,11 @@ def compute_indexid2msg(cfg, cleaner=None, smoke_node_ids=None):
         feats = node_label_features[node_type]
         if feats == ["auto"]:
             label_str = schema.node_type(node_type).auto_label_str(attrs, null_label_tokens)
-        elif cleaner:
-            # Null attributes were emptied by the cleaning: they are skipped
-            label_str = " ".join([attrs[label_used] for label_used in feats if attrs[label_used]])
         else:
-            label_str = " ".join([attrs[label_used] for label_used in feats])
+            label_str = " ".join(filter(None, (attrs[key] for key in feats)))
 
         label_str = cleaner.normalize_label(label_str)
-        if use_hashed_label:
+        if use_hashed_label and label_str:
             label_str = stringtomd5(label_str)
         # Keep only printable ASCII — labels are paths, cmds, IPs, host names, ...
         label_str = re.sub(r"[^\x20-\x7e]+", "", label_str).strip()

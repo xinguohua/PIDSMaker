@@ -65,6 +65,9 @@ class NodeTypeSchema:
 
     def auto_label_str(self, attrs, null_label_tokens):
         """Label of a node with `node_label_features=auto`, from its (cleaned) attributes."""
+        selected = self.auto_label or self.attributes
+        if not any(attrs.get(key) for key in selected):
+            return ""
         if self.auto_label:
             for i, attr in enumerate(self.auto_label):
                 value = attrs.get(attr, "")
