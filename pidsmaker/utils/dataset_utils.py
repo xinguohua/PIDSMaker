@@ -117,7 +117,7 @@ def iter_nodes(cfg, connect, node_types=None, fetch_size=50_000, node_ids=None):
         node_types: names of the node types to read (default: all types of the schema)
     """
     from pidsmaker.preprocessing.file_paths import effective_file_path, read_evidence
-    path_evidence = read_evidence(cfg) if cfg.dataset.name == "CADETS_E3" else {}
+    path_evidence = read_evidence(cfg)
     global _cursor_id
     for nt in get_schema(cfg).node_types:
         if node_types is not None and nt.name not in node_types:

@@ -35,6 +35,7 @@ class TGNCheckpointTests(unittest.TestCase):
             memory._flush_all_memory()
         torch.testing.assert_close(memory.memory, expected_memory)
         torch.testing.assert_close(memory.last_update, expected_update)
+        torch.testing.assert_close(memory._assoc, nodes)
 
 
     def test_pending_messages_and_continuous_eval_roundtrip(self):

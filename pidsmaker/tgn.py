@@ -387,6 +387,7 @@ class TGNMemory(torch.nn.Module):
         n_id = torch.arange(self.num_nodes, device=self.memory.device)
         if self.num_nodes <= self.flush_chunk_size:
             self._update_memory(n_id)
+            self._assoc.copy_(n_id)
             return
         updates = []
         for chunk in n_id.split(self.flush_chunk_size):
@@ -396,6 +397,7 @@ class TGNMemory(torch.nn.Module):
         for chunk, memory, last_update in updates:
             self.memory[chunk] = memory.to(self.memory.device)
             self.last_update[chunk] = last_update.to(self.last_update.device)
+        self._assoc.copy_(n_id)
 
 
 class TimeEncodingMemory(torch.nn.Module):
