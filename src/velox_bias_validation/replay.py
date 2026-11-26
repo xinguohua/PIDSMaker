@@ -99,7 +99,7 @@ for split in ['train','test']:
    wr=csv.writer(f);wr.writerow(['src_vector','dst_vector','operation_id','count'])
    for pair,h in hist.items():
     for op,count in h.items():wr.writerow([*pair,op,count])
-  save(out/'training_input_summary.json',dict(edges=total,batches=batches,exact_pairs=len(hist),multi_operation_pairs=sum(len(h)>1 for h in hist.values()),changes=dict(changes)))
+  save(out/'training_input_summary.json',dict(edges=total,batches=batches,exact_pairs=len(hist),multi_operation_pairs=sum(len(h)>1 for h in hist.values()),edges_in_multi_operation_pairs=sum(sum(h.values()) for h in hist.values() if len(h)>1),empirical_min_errors_if_input_is_only_information=sum(sum(h.values())-max(h.values()) for h in hist.values()),changes=dict(changes)))
   print('Training actual input counts saved',flush=True)
  else:assert total==source.execute('select count(*) from events').fetchone()[0]
 assert maxerr<1e-4 and maxce<1e-5
