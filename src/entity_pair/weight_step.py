@@ -45,6 +45,9 @@ def main(root, plan_dir, replay_dir, out):
             a,z=b.edge_index[:,ix]
             pieces[j].append((b.x[a],b.x[z],b.edge_type[ix].argmax(1)))
             mass[j]+=len(ix)/len(bids)
+    for j,parts in pieces.items():
+        tensors=[torch.cat(seq).split(8192) for seq in zip(*parts)]
+        pieces[j]=list(zip(*tensors))
     def measure(js,alt):
         total=torch.zeros(4,device=device)
         for j in js:
@@ -56,6 +59,7 @@ def main(root, plan_dir, replay_dir, out):
                     pr.gather(1,y[:,None]).sum(),pr[:,alt].sum(),torch.ones_like(y).sum()])
         return (total[:3]/total[3]).tolist()
     rows=[]
+    full_rows=[]
     with torch.no_grad():
         for i,g in groups.items():
             competition=g["C"]
@@ -81,6 +85,23 @@ def main(root, plan_dir, replay_dir, out):
                 for group,b,a in zip(("T","C"),before,after):
                     rows.append(dict(src=keys[i][0],dst=keys[i][1],group=group,weight=w,alternative=ops[alt],
                         base_loss=b[0],loss_delta=a[0]-b[0],true_p_delta=a[1]-b[1],alternative_p_delta=a[2]-b[2]))
+            # Native complete batch richest in target rows; same checkpoint and moments.
+            model.load_state_dict(initial)
+            optimizer.load_state_dict(copy.deepcopy(initial_adam))
+            bi=max(range(len(ids)),key=lambda k:np.count_nonzero(ids[k]==i))
+            b=train[0][bi].to(device)
+            with torch.enable_grad():
+                model.train()
+                optimizer.zero_grad()
+                model(b)["loss"].backward()
+                optimizer.step()
+            b.to("cpu")
+            model.eval()
+            actual=measure([i],alt)
+            full_rows.append(dict(src=keys[i][0],dst=keys[i][1],batch=bi,
+                target_rows=int(sum(ids[bi]==i)),base_loss=before[0][0],
+                loss_delta=actual[0]-before[0][0],true_p_delta=actual[1]-before[0][1]))
+            pd.DataFrame(full_rows).to_csv(out/"full_batch_steps.csv",index=False)
             pd.DataFrame(rows).to_csv(out/"weight_steps.csv",index=False)
 
 
